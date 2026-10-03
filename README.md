@@ -2,7 +2,7 @@
 
 ## What is SmartCattle?
 
-SmartCattle is a cattle monitoring project with separate frontend, backend, and AI services.
+SmartCattle is a university Software Engineering project aimed at intelligent cattle monitoring using cameras and computer vision. The project is divided into three independent repositories: SmartCattle-Frontend, SmartCattle-Backend (this repository), and SmartCattle-AI.
 
 ## Repository responsibility
 
@@ -15,7 +15,19 @@ Camera capture, image or video processing, OpenCV, YOLO, ultralytics, numpy, mod
 ## Architecture
 
 ```text
-Frontend → Backend → AI → OpenCV+YOLO → Camera
+SmartCattle-Frontend
+        │
+        │ REST / HTTP
+        ▼
+SmartCattle-Backend   ◄── POST /api/ai/events ──┐
+        │                                       │
+        │ REST / HTTP (planned)                 │
+        ▼                                       │
+SmartCattle-AI  ────────────────────────────────┘
+   OpenCV + YOLO
+        │
+        ▼
+ Camera / Video
 ```
 
 This diagram describes the project boundaries and intended integration. The backend does not call the AI service yet. AI event ingestion is implemented as `AI → Backend` through `POST /api/ai/events`.

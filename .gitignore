@@ -9,3 +9,6 @@ venv/
 htmlcov/
 .idea/
 .vscode/
+.python/
+.uv-cache/
+.pytest-tmp/
