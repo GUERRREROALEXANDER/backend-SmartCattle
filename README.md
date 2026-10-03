@@ -52,6 +52,7 @@ app/
   schemas/event.py
   schemas/status.py
   services/event_store.py
+data_structures/
 docs/ARCHITECTURE.md
 tests/
   conftest.py
@@ -169,6 +170,26 @@ The backend assigns `id` and `received_at`. Detection timestamps must include a 
 ## Future PostgreSQL integration
 
 Replace `InMemoryEventStore` with PostgreSQL-backed storage exposing `add()` and `list()`, and update app initialization. Routes receive their store from app state. No PostgreSQL dependency or connection exists today.
+
+## Data structure examples
+
+Independent academic examples demonstrate how data structures could apply to SmartCattle using only the Python standard library. They are not used by the API; see [the examples guide](data_structures/README.md) for details.
+
+| Structure | Principle | SmartCattle application |
+|---|---|---|
+| List/Array | Indexed access and traversal | Currently detected animals |
+| Stack | LIFO | Recent event history |
+| Queue | FIFO | Pending events |
+| Linked list | Linked nodes | Event sequence |
+
+Run from the repository root:
+
+```sh
+python data_structures/array_smartcattle.py
+python data_structures/stack_smartcattle.py
+python data_structures/queue_smartcattle.py
+python data_structures/linked_list_smartcattle.py
+```
 
 ## Current state
 
