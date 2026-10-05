@@ -29,6 +29,8 @@ def test_configured_status_hides_secrets(settings):
     configured = settings.model_copy(update={
         "smartcattle_ai_url": "https://smartcattle-ai.example.com",
         "ai_api_key": "private-test-key",
+        "read_api_key": "private-read-key",
+        "mysql_password": "private-db-password",
     })
     with TestClient(create_app(configured)) as client:
         response = client.get("/api/status")
@@ -36,6 +38,8 @@ def test_configured_status_hides_secrets(settings):
     assert response.json()["ai_service"] == {"configured": True}
     assert "https://smartcattle-ai.example.com" not in response.text
     assert "private-test-key" not in response.text
+    assert "private-read-key" not in response.text
+    assert "private-db-password" not in response.text
 
 
 def test_cors(client):
@@ -71,4 +75,9 @@ def test_api_key_is_documented(client):
     assert schema["components"]["securitySchemes"]["APIKeyHeader"] == {
         "type": "apiKey", "in": "header", "name": "X-API-Key",
     }
-    assert schema["paths"]["/api/ai/events"]["post"]["security"] == [{"APIKeyHeader": []}]
+    for path, method in [
+        ("/api/ai/events", "post"), ("/api/events", "get"), ("/api/animals", "get"),
+    ]:
+        assert schema["paths"][path][method]["security"] == [{"APIKeyHeader": []}]
+    for path in ["/", "/health", "/api/status"]:
+        assert "security" not in schema["paths"][path]["get"]
