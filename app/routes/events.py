@@ -6,13 +6,13 @@ from fastapi.security import APIKeyHeader
 from app.core.config import Settings
 from app.routes.health import get_app_settings
 from app.schemas.event import AIEventCreate, Event, EventList
-from app.services.event_store import InMemoryEventStore
+from app.services.event_store import EventStore
 
 router = APIRouter(tags=["events"])
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-def get_event_store(request: Request) -> InMemoryEventStore:
+def get_event_store(request: Request) -> EventStore:
     return request.app.state.event_store
 
 
@@ -27,11 +27,11 @@ def verify_api_key(
 
 
 @router.get("/api/events", response_model=EventList)
-def list_events(store: InMemoryEventStore = Depends(get_event_store)) -> EventList:
+def list_events(store: EventStore = Depends(get_event_store)) -> EventList:
     items = store.list()
     return EventList(items=items, total=len(items))
 
 
 @router.post("/api/ai/events", response_model=Event, status_code=201, dependencies=[Depends(verify_api_key)])
-def create_event(data: AIEventCreate, store: InMemoryEventStore = Depends(get_event_store)) -> Event:
+def create_event(data: AIEventCreate, store: EventStore = Depends(get_event_store)) -> Event:
     return store.add(data)
