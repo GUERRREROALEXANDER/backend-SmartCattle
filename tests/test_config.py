@@ -16,7 +16,11 @@ def isolated_environment(monkeypatch, tmp_path):
 
 def test_defaults():
     settings = Settings()
-    assert settings.cors_origins == ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5500"]
+    assert settings.cors_origins == [
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:4173", "http://127.0.0.1:4173",
+        "http://localhost:3000", "http://127.0.0.1:5500",
+    ]
     assert settings.smartcattle_ai_url is None
     assert settings.ai_api_key is None
 
@@ -24,6 +28,18 @@ def test_defaults():
 def test_origins_from_environment(monkeypatch):
     monkeypatch.setenv("ALLOWED_ORIGINS", " http://localhost:3000 , , http://localhost:5173, ")
     assert Settings().cors_origins == ["http://localhost:3000", "http://localhost:5173"]
+
+
+def test_trailing_slashes_are_removed():
+    assert Settings(allowed_origins=" https://example.com/ , http://localhost:5173/// ").cors_origins == [
+        "https://example.com", "http://localhost:5173",
+    ]
+
+
+@pytest.mark.parametrize("origin", ["localhost:5173", "ftp://example.com"])
+def test_invalid_origin_scheme(origin):
+    with pytest.raises(ValidationError, match="CORS origins must start with http:// or https://"):
+        Settings(allowed_origins=origin)
 
 
 @pytest.mark.parametrize("origins", ["*", "http://localhost:3000, * "])
