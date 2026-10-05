@@ -77,9 +77,9 @@ both assigned by the backend.
 
 ## 5. Persistence
 
-`InMemoryEventStore` keeps at most 1000 events and drops the oldest ones. It
-is the replacement point for a PostgreSQL repository: routes depend only on
-its `add()` and `list()` methods.
+`EventStore` defines the `add()` and `list()` methods used by routes.
+`InMemoryEventStore` implements it, keeps at most 1000 events, and drops the
+oldest ones. A future PostgreSQL repository can implement the same protocol.
 
 Known limitation: data is lost on restart and is not shared between workers.
 The service runs as a single uvicorn process.
@@ -92,6 +92,8 @@ minimal (`id`, `tag`).
 
 - CORS: explicit origins from `ALLOWED_ORIGINS`, never `*`. No credentials (no cookies).
 - `POST /api/ai/events` accepts an optional shared key `AI_API_KEY` in the `X-API-Key` header. If it is not set, the endpoint is open (development only). In production it **must** be set, because the endpoint is public.
+- App creation logs a warning when `AI_API_KEY` is unset; the key value is never logged.
+- Validation errors return 422 without echoing submitted input values.
 - `/api/status` reports whether the AI service is configured but never exposes its URL.
 - Unhandled errors → 500 with a generic message and no stack trace.
 

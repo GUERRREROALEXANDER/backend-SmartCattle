@@ -118,6 +118,20 @@ In PowerShell, use `$env:PORT` for an environment variable. Run a single Uvicorn
 
 Invalid event bodies return 422. If a shared key is configured, a missing or incorrect key returns 401 with `Invalid or missing API key`. Unhandled errors return 500 with `Internal server error` without a trace in the response.
 
+## Frontend integration
+
+Set `BACKEND_BASE_URL` in the frontend to `http://localhost:8000` for local development. The GET responses have these JSON shapes:
+
+| Endpoint | Response JSON |
+| --- | --- |
+| `/` | `{"name":"SmartCattle Backend","version":"<version>","docs":"/docs"}` |
+| `/health` | `{"status":"ok"}` |
+| `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory"}` (`configured` may be `true`) |
+| `/api/animals` | `{"items":[],"total":0}` |
+| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","id":"<uuid>","received_at":"2026-10-03T15:30:01Z"}],"total":1}` (empty: `{"items":[],"total":0}`) |
+
+Validation errors (422) use `{"detail":[{"type":"<error type>","loc":["body","<field>"],"msg":"<message>"}]}`. Error objects may also contain safe `ctx` details, but never the submitted `input`. Errors 401, 404, and 500 use a string in `detail`. Timestamps are ISO 8601 with a timezone. `/api/events` is newest first and retains at most 1000 events. Confidence must be a finite number between 0 and 1 inclusive.
+
 ## API documentation
 
 Open `/docs` for Swagger UI or `/redoc` for ReDoc. In `/docs`, use **Authorize** to supply `X-API-Key`. The event schema includes descriptions and a complete example.
@@ -128,11 +142,13 @@ Settings load from `.env` and the environment; environment variables take preced
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500` | Comma-separated origins; spaces and empty entries are removed. `*` is rejected. |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:3000,http://127.0.0.1:5500` | Comma-separated HTTP(S) origins; spaces, trailing slashes, and empty entries are removed. `*` is rejected. |
 | `SMARTCATTLE_AI_URL` | Empty | Optional HTTP(S) URL for future integration; empty means unset. No outgoing AI requests are implemented. |
 | `AI_API_KEY` | Empty | Optional shared key for event ingestion; empty means unset. Set it in production. |
 
 When `AI_API_KEY` is unset, event ingestion is open for development. CORS allows GET and POST, accepts Content-Type and X-API-Key, and does not allow credentials. Status responses never expose the AI URL or key.
+
+For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 
 ## Tests
 
@@ -165,7 +181,7 @@ curl -X POST http://localhost:8000/api/ai/events \
   -d '{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z"}'
 ```
 
-The backend assigns `id` and `received_at`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be between 0 and 1. Extra fields and unknown event types are rejected.
+The backend assigns `id` and `received_at`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. Extra fields and unknown event types are rejected.
 
 ## Future PostgreSQL integration
 
