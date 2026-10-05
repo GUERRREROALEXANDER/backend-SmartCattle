@@ -39,6 +39,40 @@ def test_invalid_event(client, event_payload, changes):
     assert client.get("/api/events").json()["total"] == 0
 
 
+@pytest.mark.parametrize("confidence", ["NaN", "Infinity", "-Infinity", "1e400"])
+def test_non_finite_confidence(client, confidence):
+    body = ('{"event_type":"cattle_out_of_zone","camera_id":"camera-01",'
+            '"detected_object":"cow","confidence":' + confidence + ','
+            '"timestamp":"2026-10-03T15:30:00Z"}')
+    response = client.post("/api/ai/events", content=body, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    errors = response.json()["detail"]
+    assert any(error["loc"] == ["body", "confidence"] and error["type"] == "finite_number" for error in errors)
+    assert all("input" not in error for error in errors)
+    assert client.get("/api/events").json()["total"] == 0
+
+
+@pytest.mark.parametrize("confidence", [0, 1])
+def test_confidence_boundaries(client, event_payload, confidence):
+    response = client.post("/api/ai/events", json=event_payload | {"confidence": confidence})
+    assert response.status_code == 201
+    assert response.json()["confidence"] == float(confidence)
+    assert client.get("/api/events").json()["items"][0]["confidence"] == float(confidence)
+
+
+def test_validation_error_does_not_echo_extra_value(client, event_payload):
+    response = client.post("/api/ai/events", json=event_payload | {"extra_field": "private-submitted-value"})
+    assert response.status_code == 422
+    assert "private-submitted-value" not in response.text
+    assert all("input" not in error for error in response.json()["detail"])
+
+
+def test_malformed_json(client):
+    response = client.post("/api/ai/events", content="{bad", headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+
+
 def test_identifiers_are_trimmed(client, event_payload):
     response = client.post("/api/ai/events", json=event_payload | {
         "camera_id": " camera-01 ", "detected_object": " cow ",
@@ -73,3 +107,11 @@ def test_apps_have_isolated_stores(client, settings, event_payload):
     assert client.post("/api/ai/events", json=event_payload).status_code == 201
     with TestClient(create_app(settings)) as other:
         assert other.get("/api/events").json() == {"items": [], "total": 0}
+
+
+def test_missing_api_key_logs_warning(settings, caplog):
+    with caplog.at_level("WARNING", logger="app.main"):
+        create_app(settings)
+    assert [record.message for record in caplog.records if record.message.startswith("AI_API_KEY is not set")] == [
+        "AI_API_KEY is not set; POST /api/ai/events accepts unauthenticated requests",
+    ]
