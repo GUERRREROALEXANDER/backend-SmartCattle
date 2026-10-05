@@ -1,37 +1,51 @@
-import secrets
+from fastapi import APIRouter, Depends, Query, Request, Response
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Security
-from fastapi.security import APIKeyHeader
-
-from app.core.config import Settings
-from app.routes.health import get_app_settings
-from app.schemas.event import AIEventCreate, Event, EventList
-from app.services.event_store import InMemoryEventStore
+from app.core.security import verify_ingest_key, verify_read_key
+from app.schemas.event import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    AIEventCreate,
+    Event,
+    EventList,
+)
+from app.services.event_store import EventStore
 
 router = APIRouter(tags=["events"])
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-def get_event_store(request: Request) -> InMemoryEventStore:
+def get_event_store(request: Request) -> EventStore:
     return request.app.state.event_store
 
 
-def verify_api_key(
-    settings: Settings = Depends(get_app_settings),
-    api_key: str | None = Security(api_key_header),
-) -> None:
-    if settings.ai_api_key is not None:
-        expected = settings.ai_api_key.get_secret_value()
-        if api_key is None or not secrets.compare_digest(api_key.encode("utf-8"), expected.encode("utf-8")):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+@router.get(
+    "/api/events", response_model=EventList, dependencies=[Depends(verify_read_key)]
+)
+def list_events(
+    store: EventStore = Depends(get_event_store),
+    limit: int = Query(
+        DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE, description="Events per page"
+    ),
+    offset: int = Query(0, ge=0, description="Events to skip before this page"),
+) -> EventList:
+    return EventList(
+        items=store.list(limit=limit, offset=offset),
+        total=store.count(),
+        limit=limit,
+        offset=offset,
+    )
 
 
-@router.get("/api/events", response_model=EventList)
-def list_events(store: InMemoryEventStore = Depends(get_event_store)) -> EventList:
-    items = store.list()
-    return EventList(items=items, total=len(items))
-
-
-@router.post("/api/ai/events", response_model=Event, status_code=201, dependencies=[Depends(verify_api_key)])
-def create_event(data: AIEventCreate, store: InMemoryEventStore = Depends(get_event_store)) -> Event:
-    return store.add(data)
+@router.post(
+    "/api/ai/events",
+    response_model=Event,
+    status_code=201,
+    dependencies=[Depends(verify_ingest_key)],
+    responses={200: {"description": "This ai_event_id was already stored; nothing was created"}},
+)
+def create_event(
+    data: AIEventCreate, response: Response, store: EventStore = Depends(get_event_store)
+) -> Event:
+    event, created = store.add(data)
+    if not created:
+        response.status_code = 200
+    return event
