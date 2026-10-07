@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from enum import Enum
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
 class CameraStatus(str, Enum):
@@ -25,6 +25,20 @@ class CameraStatusReport(BaseModel):
     frame_height: int | None = Field(default=None, ge=1, le=10000)
     fps: float | None = Field(default=None, gt=0, le=240, allow_inf_nan=False)
     observed_at: AwareDatetime = Field(description="When the AI service observed this state")
+    stream_url: HttpUrl | None = Field(
+        default=None,
+        description="Public base URL of the AI service video (serves /video.mjpg and /status); only kept while online",
+    )
+
+    @field_validator("stream_url")
+    @classmethod
+    def safe_stream_url(cls, value: HttpUrl | None) -> HttpUrl | None:
+        # The URL is public through GET /api/cameras, so it must never carry user:password.
+        if value is not None and (value.username or value.password):
+            raise ValueError("stream_url must not contain credentials")
+        if value is not None and len(str(value)) > 300:
+            raise ValueError("stream_url must be at most 300 characters")
+        return value
 
     @field_validator("error", mode="before")
     @classmethod
@@ -54,6 +68,7 @@ class CameraRecord(BaseModel):
     frame_width: int | None = None
     frame_height: int | None = None
     fps: float | None = None
+    stream_url: str | None = None
 
 
 class Camera(CameraRecord):
@@ -82,4 +97,6 @@ def apply_report(record: CameraRecord | None, camera_id: str, report: CameraStat
         last_online_at=received_at if online else (record.last_online_at if record else None),
         last_error=report.error if report.status is CameraStatus.ERROR else None,
         frame_width=report.frame_width, frame_height=report.frame_height, fps=report.fps,
+        # A camera that is not streaming has no video to link to.
+        stream_url=str(report.stream_url).rstrip("/") if online and report.stream_url else None,
     )

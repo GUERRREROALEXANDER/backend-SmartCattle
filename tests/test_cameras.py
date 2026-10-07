@@ -58,7 +58,20 @@ def test_invalid_camera_id(client, online_report, camera_id):
     assert client.put(f"/api/ai/cameras/{camera_id}/status", json=online_report).status_code == 422
 
 
+def test_stream_url_only_while_online(client, online_report):
+    url = "https://abc-def.trycloudflare.com/"
+    camera = client.put(STATUS_URL, json=online_report | {"stream_url": url}).json()
+    assert camera["stream_url"] == "https://abc-def.trycloudflare.com"
+    assert client.get("/api/cameras").json()["items"][0]["stream_url"] == camera["stream_url"]
+    error = client.put(STATUS_URL, json={"status": "error", "error": "Stream read timeout", "stream_url": url,
+                                         "observed_at": "2026-10-06T15:31:00Z"}).json()
+    assert error["stream_url"] is None
+    assert client.put(STATUS_URL, json=online_report).json()["stream_url"] is None
+
+
 @pytest.mark.parametrize("changes", [
+    {"stream_url": "https://admin:secret@example.com"}, {"stream_url": "ftp://example.com"},
+    {"stream_url": "https://example.com/" + "x" * 300},
     {"status": "connecting"}, {"error": "boom"}, {"observed_at": "2026-10-06T15:30:00"},
     {"status": "error", "error": "failed rtsp://admin:secret@10.0.0.2:554/x"},
     {"status": "error", "error": "x" * 301}, {"fps": 0}, {"fps": 241}, {"frame_width": 0},

@@ -21,6 +21,7 @@ class CameraRow(Base):
     frame_width: Mapped[int | None] = mapped_column(Integer)
     frame_height: Mapped[int | None] = mapped_column(Integer)
     fps: Mapped[float | None] = mapped_column(Float)
+    stream_url: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

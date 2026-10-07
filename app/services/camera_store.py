@@ -36,6 +36,7 @@ def _to_record(row: CameraRow) -> CameraRecord:
         id=row.id, reported_status=row.reported_status,
         last_report_at=_aware(row.last_report_at), last_online_at=_aware(row.last_online_at),
         last_error=row.last_error, frame_width=row.frame_width, frame_height=row.frame_height, fps=row.fps,
+        stream_url=row.stream_url,
     )
 
 
@@ -57,7 +58,7 @@ class SqlCameraStore:
                 row = CameraRow(id=camera_id, created_at=now)
                 session.add(row)
             row.reported_status = record.reported_status.value
-            for field in ("last_report_at", "last_online_at", "last_error", "frame_width", "frame_height", "fps"):
+            for field in ("last_report_at", "last_online_at", "last_error", "frame_width", "frame_height", "fps", "stream_url"):
                 setattr(row, field, getattr(record, field))
             return record
 
