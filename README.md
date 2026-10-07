@@ -56,7 +56,7 @@ app/
   services/camera_store.py memory and SQL camera stores
 migrations/                Alembic environment and revisions
 alembic.ini
-render.yaml                Render Blueprint (backend + PostgreSQL)
+render.yaml                Render Blueprint (backend + PostgreSQL + frontend static site)
 data_structures/
 docs/ARCHITECTURE.md
 tests/
@@ -257,4 +257,4 @@ python data_structures/linked_list_smartcattle.py
 
 ## Current state
 
-With `DATABASE_URL`, events and camera status are persisted in PostgreSQL; without it they live in memory and are lost on restart (only the latest 1000 events are kept). `GET /api/events` returns at most the 1000 most recent events. There is no user authentication or notification system, and no video is served by the backend. The optional ingestion key is service-level protection. Individual animal identification and outgoing AI calls are not implemented.
+`render.yaml` is a Render Blueprint that creates a free PostgreSQL database `smartcattle-db`, the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository. In Render: **New → Blueprint**, select this repository and apply. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `DATABASE_URL` comes from the database and `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
