@@ -77,12 +77,10 @@ both assigned by the backend.
 
 ## 5. Persistence
 
-`EventStore` defines the `add()` and `list()` methods used by routes.
-`InMemoryEventStore` implements it, keeps at most 1000 events, and drops the
-oldest ones. A future PostgreSQL repository can implement the same protocol.
-
-Known limitation: data is lost on restart and is not shared between workers.
-The service runs as a single uvicorn process.
+`EventStore` and `CameraStore` define the methods used by routes. Each has an
+in-memory implementation (development and tests, data lost on restart) and a
+SQL implementation (`SqlEventStore`, `SqlCameraStore`) used when
+`DATABASE_URL` is set. See section 8 for the PostgreSQL decisions.
 
 Animals: the prototype does not identify individual animals, so
 `GET /api/animals` returns an empty collection and the `Animal` schema is
@@ -104,7 +102,57 @@ minimal (`id`, `tag`).
 | fastapi | HTTP framework and automatic `/docs` |
 | uvicorn | ASGI server |
 | pydantic-settings | Typed configuration from environment and `.env` |
+| sqlalchemy | ORM and connection pool for PostgreSQL |
+| alembic | Versioned schema migrations |
+| psycopg[binary] | PostgreSQL driver (psycopg 3) |
 | pytest, httpx (dev) | Tests; `TestClient` requires httpx |
 
 Development dependencies live in `requirements-dev.txt` so the deployment
 installs only what it needs.
+
+## 8. PostgreSQL and camera status
+
+Decided 2026-10-06 while connecting the real camera pipeline.
+
+**Who writes to the database.** Only this backend. The AI service runs on a
+PC on the farm network (the camera is only reachable there) and pushes data
+over HTTPS; it never receives database credentials.
+
+**Tables.** Only what the current features need:
+
+| Table | Why it exists |
+|---|---|
+| `events` | Persists `POST /api/ai/events`. Alerts are these events: the frontend derives severity from `event_type`, so a separate alerts table would duplicate rows. |
+| `cameras` | Persists the last status the AI reported for each camera. Rows are created by the first report; there is no manual camera CRUD yet. |
+
+Not created, on purpose:
+
+- **Detections table.** YOLO runs several times per second; storing every
+  detection would flood the database with data nobody reads. The AI sends
+  only relevant events (cattle outside the safe zone), with the bounding box.
+- **Foreign key `events.camera_id → cameras.id`.** Events must be accepted
+  even if the camera never sent a status report (for example, an AI run on a
+  recorded video). The column is indexed.
+
+**Schema management.** Alembic migrations only (`alembic upgrade head` runs
+before Uvicorn on Render). The application never calls `create_all`, so the
+schema cannot silently drift from the migrations. Column types
+(`DateTime(timezone=True)`, `Uuid`, `JSON`) also work on SQLite, which the
+tests use to exercise the same migration without a PostgreSQL server.
+
+**Effective camera status.** The AI reports `online`, `error` or `offline`
+through `PUT /api/ai/cameras/{id}/status` every few seconds. `GET /api/cameras`
+computes the effective status on read: if the last report is older than
+`CAMERA_OFFLINE_AFTER_SECONDS` (default 60), the camera is `offline`. A
+stored `online` is therefore never shown once the AI stops confirming it
+(AI crashed, PC off, network down). The staleness rule is a pure function
+with unit tests.
+
+**Secrets.** `DATABASE_URL` is a `SecretStr` and never appears in
+responses or logs. Camera error messages are capped at 300 characters and
+rejected if they contain `://`, so a stream URL with embedded credentials
+cannot be stored and later shown in the frontend.
+
+**Video.** The backend does not proxy or store video. Live video, when the
+camera stream is confirmed, goes from a local media server on the farm PC to
+the browser (see the AI repository README); the backend only stores state.

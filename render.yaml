@@ -1,0 +1,29 @@
+# Render Blueprint: New -> Blueprint -> select this repository.
+databases:
+  - name: smartcattle-db
+    plan: free
+    databaseName: smartcattle
+    user: smartcattle
+
+services:
+  - type: web
+    name: smartcattle-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # Migrations run on every deploy before the API starts.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smartcattle-db
+          property: connectionString
+      - key: AI_API_KEY
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: CAMERA_OFFLINE_AFTER_SECONDS
+        value: "60"

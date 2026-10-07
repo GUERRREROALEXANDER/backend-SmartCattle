@@ -6,60 +6,60 @@ SmartCattle is a university Software Engineering project aimed at intelligent ca
 
 ## Repository responsibility
 
-This repository provides the REST API, validates incoming AI events, exposes animal and event collections, and configures CORS. The animal collection is currently empty.
+This repository provides the REST API, validates incoming AI events and camera status reports, persists them in PostgreSQL, exposes animal, event and camera collections, and configures CORS. The animal collection is currently empty.
 
 ## What does not belong here?
 
-Camera capture, image or video processing, OpenCV, YOLO, ultralytics, numpy, model weights, and frontend HTML/CSS/JS belong to other repositories. Flask and gunicorn are not used. No database is implemented.
+Camera capture, image or video processing, OpenCV, YOLO, ultralytics, numpy, model weights, and frontend HTML/CSS/JS belong to other repositories. Flask and gunicorn are not used.
 
 ## Architecture
 
 ```text
-SmartCattle-Frontend
-        │
-        │ REST / HTTP
-        ▼
-SmartCattle-Backend   ◄── POST /api/ai/events ──┐
-        │                                       │
-        │ REST / HTTP (planned)                 │
-        ▼                                       │
-SmartCattle-AI  ────────────────────────────────┘
-   OpenCV + YOLO
-        │
-        ▼
- Camera / Video
+ Render (Internet)                         Local PC (farm network)
+┌──────────────────────────┐              ┌──────────────────────────┐
+│ SmartCattle-Frontend     │              │ SmartCattle-AI           │
+│        │ REST            │    HTTPS     │ OpenCV + YOLO            │
+│        ▼                 │ ◄─────────── │  POST /api/ai/events     │
+│ SmartCattle-Backend      │              │  PUT  /api/ai/cameras/…  │
+│        │ SQLAlchemy      │              │        ▲ RTSP (LAN only) │
+│        ▼                 │              └────────┼─────────────────┘
+│ PostgreSQL               │                       │
+└──────────────────────────┘                IP camera (IMOU)
 ```
 
-This diagram describes the project boundaries and intended integration. The backend does not call the AI service yet. AI event ingestion is implemented as `AI → Backend` through `POST /api/ai/events`.
+The AI service runs next to the camera because the camera is only reachable on the local network; Render cannot open a connection to it. The AI never talks to PostgreSQL: it pushes events and camera status to this backend over HTTPS. The backend does not call the AI service.
 
 See [Architecture decisions and event contract](docs/ARCHITECTURE.md).
 
 ## Technologies
 
-Python 3.13, FastAPI, Uvicorn, and Pydantic Settings. Tests use pytest and httpx through FastAPI's TestClient.
+Python 3.13, FastAPI, Uvicorn, Pydantic Settings, SQLAlchemy 2, Alembic and psycopg 3 (PostgreSQL). Tests use pytest and httpx through FastAPI's TestClient.
 
 ## Structure
 
 ```text
 app/
   __init__.py
-  main.py
+  main.py                  create_app(): picks SQL or memory stores
+  db.py                    SQLAlchemy Base, engine and sessions
+  models.py                cameras and events tables
   core/config.py
   routes/health.py
   routes/animals.py
   routes/events.py
+  routes/cameras.py
   schemas/animal.py
+  schemas/camera.py
   schemas/event.py
   schemas/status.py
-  services/event_store.py
+  services/event_store.py  memory and SQL event stores
+  services/camera_store.py memory and SQL camera stores
+migrations/                Alembic environment and revisions
+alembic.ini
+render.yaml                Render Blueprint (backend + PostgreSQL)
 data_structures/
 docs/ARCHITECTURE.md
 tests/
-  conftest.py
-  test_health.py
-  test_animals.py
-  test_events.py
-  test_config.py
 requirements.txt
 requirements-dev.txt
 .env.example
@@ -103,7 +103,30 @@ Cloud deployment, with `PORT` supplied by the platform (POSIX shell):
 uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
-In PowerShell, use `$env:PORT` for an environment variable. Run a single Uvicorn process: memory storage is not shared between workers.
+In PowerShell, use `$env:PORT` for an environment variable. Without `DATABASE_URL`, run a single Uvicorn process: memory storage is not shared between workers.
+
+## Database
+
+Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events and cameras are stored in PostgreSQL. The schema is created **only** by Alembic migrations, never at application startup.
+
+Local PostgreSQL (replace the placeholders; never commit real credentials):
+
+```powershell
+psql -U postgres -c "CREATE DATABASE smartcattle"
+# in .env:
+# DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/smartcattle
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+`postgres://` and `postgresql://` URLs (the form Render provides) are rewritten to the psycopg 3 driver automatically. Roll back with `alembic downgrade base`.
+
+| Table | Content |
+| --- | --- |
+| `cameras` | One row per camera that ever reported status: last reported status, last report time, last time online, last error, resolution and FPS |
+| `events` | AI events (`cattle_out_of_zone`), with optional bounding box |
+
+Per-frame detections are not stored: the AI only sends relevant events. See [ARCHITECTURE.md](docs/ARCHITECTURE.md#8-postgresql-and-camera-status).
 
 ## Endpoints
 
@@ -111,10 +134,25 @@ In PowerShell, use `$env:PORT` for an environment variable. Run a single Uvicorn
 | --- | --- | --- |
 | GET | `/` | Service name, version, and docs path |
 | GET | `/health` | `{"status":"ok"}` deployment health check |
-| GET | `/api/status` | Version, AI configuration flag, and storage type |
+| GET | `/api/status` | Version, AI configuration flag, and storage type (`memory` or `postgresql`) |
 | GET | `/api/animals` | Empty animal collection with total zero |
-| GET | `/api/events` | Stored events, most recently received first, and total |
+| GET | `/api/events` | Stored events, most recently received first (at most 1000), and total |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
+| GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
+| PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
+
+### Camera status
+
+The AI service reports each camera with `PUT /api/ai/cameras/{camera_id}/status` (same `X-API-Key` as events):
+
+```json
+{"status": "online", "frame_width": 1280, "frame_height": 720, "fps": 14.8, "observed_at": "2026-10-06T15:30:00Z"}
+{"status": "error", "error": "Stream read timeout", "observed_at": "2026-10-06T15:31:00Z"}
+```
+
+`status` is `online`, `error` or `offline`. `error` is only accepted with `status: "error"`, holds at most 300 characters and may not contain a URL (`://`), so stream URLs with credentials can never be stored. `camera_id` must match `^[A-Za-z0-9_-]{1,64}$`.
+
+`GET /api/cameras` returns `status` (effective) and `reported_status`. If the last report is older than `CAMERA_OFFLINE_AFTER_SECONDS`, the effective status is `offline`: the backend cannot claim a camera is online unless the AI service keeps confirming it. Cameras appear only after their first report; an empty list means no camera is connected.
 
 Invalid event bodies return 422. If a shared key is configured, a missing or incorrect key returns 401 with `Invalid or missing API key`. Unhandled errors return 500 with `Internal server error` without a trace in the response.
 
@@ -128,7 +166,8 @@ Set `BACKEND_BASE_URL` in the frontend to `http://localhost:8000` for local deve
 | `/health` | `{"status":"ok"}` |
 | `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory"}` (`configured` may be `true`) |
 | `/api/animals` | `{"items":[],"total":0}` |
-| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","id":"<uuid>","received_at":"2026-10-03T15:30:01Z"}],"total":1}` (empty: `{"items":[],"total":0}`) |
+| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
+| `/api/cameras` | `{"items":[{"id":"camera-01","reported_status":"online","status":"online","last_report_at":"<UTC>","last_online_at":"<UTC>","last_error":null,"frame_width":1280,"frame_height":720,"fps":14.8}],"total":1}` (no camera yet: `{"items":[],"total":0}`) |
 
 Validation errors (422) use `{"detail":[{"type":"<error type>","loc":["body","<field>"],"msg":"<message>"}]}`. Error objects may also contain safe `ctx` details, but never the submitted `input`. Errors 401, 404, and 500 use a string in `detail`. Timestamps are ISO 8601 with a timezone. `/api/events` is newest first and retains at most 1000 events. Confidence must be a finite number between 0 and 1 inclusive.
 
@@ -144,11 +183,17 @@ Settings load from `.env` and the environment; environment variables take preced
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:3000,http://127.0.0.1:5500` | Comma-separated HTTP(S) origins; spaces, trailing slashes, and empty entries are removed. `*` is rejected. |
 | `SMARTCATTLE_AI_URL` | Empty | Optional HTTP(S) URL for future integration; empty means unset. No outgoing AI requests are implemented. |
-| `AI_API_KEY` | Empty | Optional shared key for event ingestion; empty means unset. Set it in production. |
+| `AI_API_KEY` | Empty | Optional shared key for event and camera status ingestion; empty means unset. Set it in production. |
+| `DATABASE_URL` | Empty | PostgreSQL URL. Empty means in-memory storage. Never exposed by any endpoint. |
+| `CAMERA_OFFLINE_AFTER_SECONDS` | `60` | A camera without a report for longer than this (10–3600) is shown as `offline`. |
 
-When `AI_API_KEY` is unset, event ingestion is open for development. CORS allows GET and POST, accepts Content-Type and X-API-Key, and does not allow credentials. Status responses never expose the AI URL or key.
+When `AI_API_KEY` is unset, ingestion is open for development. CORS allows GET, POST and PUT, accepts Content-Type and X-API-Key, and does not allow credentials. Status responses never expose the AI URL, key or database URL.
 
 For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
+
+## Deploying on Render
+
+`render.yaml` is a Render Blueprint that creates a free PostgreSQL database `smartcattle-db` and the web service `smartcattle-backend`. In Render: **New → Blueprint**, select this repository, then fill `ALLOWED_ORIGINS` with the frontend URL. `DATABASE_URL` comes from the database and `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
 
 ## Tests
 
@@ -156,11 +201,16 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 python -m pytest -q
 ```
 
-Tests cover endpoints, event validation, shared-key protection, CORS, configuration, error handling, per-app isolation, and the 1000-event storage limit.
+Tests cover endpoints, event and camera status validation, shared-key protection, CORS, configuration, error handling, per-app isolation, the 1000-event storage limit, and Alembic migrations plus SQL persistence on a temporary SQLite database. To also run them against a real PostgreSQL database (it is migrated up and back down, so use an empty test database):
 
-## Future SmartCattle-AI integration
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://USER:PASSWORD@localhost:5432/smartcattle_test"
+python -m pytest -q
+```
 
-The AI service can send this event to the existing ingestion endpoint:
+## SmartCattle-AI integration
+
+The AI service sends this event to the ingestion endpoint:
 
 ```json
 {
@@ -181,11 +231,7 @@ curl -X POST http://localhost:8000/api/ai/events \
   -d '{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z"}'
 ```
 
-The backend assigns `id` and `received_at`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. Extra fields and unknown event types are rejected.
-
-## Future PostgreSQL integration
-
-Replace `InMemoryEventStore` with PostgreSQL-backed storage exposing `add()` and `list()`, and update app initialization. Routes receive their store from app state. No PostgreSQL dependency or connection exists today.
+The backend assigns `id` and `received_at`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. The optional `bbox` is `[x1, y1, x2, y2]` in frame pixels: four finite numbers ≥ 0 with `x1 < x2` and `y1 < y2`. Extra fields and unknown event types are rejected.
 
 ## Data structure examples
 
@@ -209,4 +255,4 @@ python data_structures/linked_list_smartcattle.py
 
 ## Current state
 
-Events are stored in memory and are lost on restart. Only the latest 1000 received events are retained; the oldest are discarded. Data is not shared between processes. There is no database, user authentication, or notification system. The optional ingestion key is service-level protection. Individual animal identification and outgoing AI calls are not implemented.
+With `DATABASE_URL`, events and camera status are persisted in PostgreSQL; without it they live in memory and are lost on restart (only the latest 1000 events are kept). `GET /api/events` returns at most the 1000 most recent events. There is no user authentication or notification system, and no video is served by the backend. The optional ingestion key is service-level protection. Individual animal identification and outgoing AI calls are not implemented.
