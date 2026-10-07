@@ -6,7 +6,7 @@ from app.core.config import Settings, get_settings
 
 @pytest.fixture(autouse=True)
 def isolated_environment(monkeypatch, tmp_path):
-    for name in ("ALLOWED_ORIGINS", "SMARTCATTLE_AI_URL", "AI_API_KEY"):
+    for name in ("ALLOWED_ORIGINS", "SMARTCATTLE_AI_URL", "AI_API_KEY", "DATABASE_URL", "CAMERA_OFFLINE_AFTER_SECONDS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()

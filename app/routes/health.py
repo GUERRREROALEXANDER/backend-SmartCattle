@@ -26,5 +26,5 @@ def status(settings: Settings = Depends(get_app_settings)) -> StatusResponse:
     return StatusResponse(
         status="ok", version=__version__,
         ai_service=AIServiceStatus(configured=settings.smartcattle_ai_url is not None),
-        storage="memory",
+        storage=settings.storage_name,
     )

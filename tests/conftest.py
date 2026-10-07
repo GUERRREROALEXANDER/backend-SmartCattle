@@ -12,6 +12,7 @@ def settings():
         allowed_origins="http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500",
         smartcattle_ai_url=None,
         ai_api_key=None,
+        database_url=None,
     )
 
 
@@ -25,7 +26,7 @@ def client(settings):
 def secured_client(settings):
     configured = Settings(
         _env_file=None, allowed_origins=settings.allowed_origins,
-        smartcattle_ai_url=None, ai_api_key="test-shared-key",
+        smartcattle_ai_url=None, ai_api_key="test-shared-key", database_url=None,
     )
     with TestClient(create_app(configured)) as client:
         yield client
