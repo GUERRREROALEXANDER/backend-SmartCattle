@@ -152,6 +152,8 @@ The AI service reports each camera with `PUT /api/ai/cameras/{camera_id}/status`
 
 `status` is `online`, `error` or `offline`. `error` is only accepted with `status: "error"`, holds at most 300 characters and may not contain a URL (`://`), so stream URLs with credentials can never be stored. `camera_id` must match `^[A-Za-z0-9_-]{1,64}$`.
 
+Optional `stream_url` is the public `http(s)` base URL of the AI service video (it serves `/video.mjpg` and `/status`), for example a Cloudflare tunnel. It may not contain credentials, holds at most 300 characters, is returned by `GET /api/cameras` and is kept only while the camera reports `online`. The frontend uses it to show the video.
+
 `GET /api/cameras` returns `status` (effective) and `reported_status`. If the last report is older than `CAMERA_OFFLINE_AFTER_SECONDS`, the effective status is `offline`: the backend cannot claim a camera is online unless the AI service keeps confirming it. Cameras appear only after their first report; an empty list means no camera is connected.
 
 Invalid event bodies return 422. If a shared key is configured, a missing or incorrect key returns 401 with `Invalid or missing API key`. Unhandled errors return 500 with `Internal server error` without a trace in the response.
