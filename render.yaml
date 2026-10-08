@@ -1,13 +1,8 @@
 # Render Blueprint: New -> Blueprint -> select this repository.
-# Creates the database, this API and the frontend static site (from its own repository).
+# Creates this API and the frontend static site (from its own repository).
+# The database lives on Neon: Render asks for DATABASE_URL when the Blueprint is created.
 # If Render adds a suffix to a service URL because the name is taken, update
 # ALLOWED_ORIGINS and VITE_API_BASE_URL to the real URLs.
-databases:
-  - name: smartcattle-db
-    plan: free
-    databaseName: smartcattle
-    user: smartcattle
-
 services:
   - type: web
     name: smartcattle-backend
@@ -20,10 +15,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.1
+      # Neon connection string (postgresql://...?sslmode=require), entered in the Render dashboard.
       - key: DATABASE_URL
-        fromDatabase:
-          name: smartcattle-db
-          property: connectionString
+        sync: false
       - key: AI_API_KEY
         generateValue: true
       - key: ALLOWED_ORIGINS
