@@ -114,31 +114,33 @@ installs only what it needs.
 
 Decided 2026-10-06 while connecting the real camera pipeline.
 
-**Who writes to the database.** Only this backend. The AI service runs on a
-PC on the farm network (the camera is only reachable there) and pushes data
-over HTTPS; it never receives database credentials.
+**Who writes to the database.** This backend, among other team services. The
+AI service runs on a PC on the farm network (the camera is only reachable
+there) and pushes data over HTTPS; it never receives database credentials.
 
-**Tables.** Only what the current features need:
+**Shared schema (updated 2026-10-07).** The database belongs to the team's
+[database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle)
+(`cameras`, `zones`, `users`, `animals`, `events`, `alerts`);
+`database/schema.sql` is a copy. The backend adapts to it instead of owning
+its own tables. It uses:
 
-| Table | Why it exists |
+| Table | How the backend uses it |
 |---|---|
-| `events` | Persists `POST /api/ai/events`. Alerts are these events: the frontend derives severity from `event_type`, so a separate alerts table would duplicate rows. |
-| `cameras` | Persists the last status the AI reported for each camera. Rows are created by the first report; there is no manual camera CRUD yet. |
+| `events` | Persists `POST /api/ai/events`. The API UUID is `ai_event_id` (unique), `received_at` is the receipt time; both columns were added to the shared schema for this backend. |
+| `cameras` | The API camera id is `cameras.name`. A first status report or event creates the row, because `events.camera_id` is a foreign key to `cameras.id`. The backend adds the nullable status columns. |
 
-Not created, on purpose:
+The backend does not write `zones`, `users`, `animals` or `alerts` yet.
 
-- **Detections table.** YOLO runs several times per second; storing every
-  detection would flood the database with data nobody reads. The AI sends
-  only relevant events (cattle outside the safe zone), with the bounding box.
-- **Foreign key `events.camera_id → cameras.id`.** Events must be accepted
-  even if the camera never sent a status report (for example, an AI run on a
-  recorded video). The column is indexed.
+Not stored, on purpose: **per-frame detections.** YOLO runs several times per
+second; storing every detection would flood the database with data nobody
+reads. The AI sends only relevant events (cattle outside the safe zone), with
+the bounding box.
 
-**Schema management.** Alembic migrations only (`alembic upgrade head` runs
-before Uvicorn on Render). The application never calls `create_all`, so the
-schema cannot silently drift from the migrations. Column types
-(`DateTime(timezone=True)`, `Uuid`, `JSON`) also work on SQLite, which the
-tests use to exercise the same migration without a PostgreSQL server.
+**Schema management.** `alembic upgrade head` runs before Uvicorn on Render.
+The first revision applies `database/schema.sql` only to an empty database and
+never alters an existing one; the second adds the camera status columns. The
+application never calls `create_all`. On SQLite, which the tests use, the
+first revision creates the `cameras` and `events` columns the backend maps.
 
 **Effective camera status.** The AI reports `online`, `error` or `offline`
 through `PUT /api/ai/cameras/{id}/status` every few seconds. `GET /api/cameras`
