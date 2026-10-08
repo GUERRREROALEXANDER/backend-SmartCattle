@@ -3,7 +3,9 @@ from threading import Lock
 from typing import Protocol
 
 from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import CameraRow
 from app.schemas.camera import CameraRecord, CameraStatusReport, apply_report
@@ -31,9 +33,17 @@ class InMemoryCameraStore:
             return [self._cameras[key] for key in sorted(self._cameras)]
 
 
+def camera_row(session: Session, name: str, *, lock: bool = False) -> CameraRow:
+    """Returns the camera with this API id, creating it if needed; safe when two requests race."""
+    insert = (pg_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert)(CameraRow)
+    session.execute(insert.values(name=name).on_conflict_do_nothing(index_elements=["name"]))
+    query = select(CameraRow).where(CameraRow.name == name)
+    return session.scalars(query.with_for_update() if lock else query).one()
+
+
 def _to_record(row: CameraRow) -> CameraRecord:
     return CameraRecord(
-        id=row.id, reported_status=row.reported_status,
+        id=row.name, reported_status=row.reported_status,
         last_report_at=_aware(row.last_report_at), last_online_at=_aware(row.last_online_at),
         last_error=row.last_error, frame_width=row.frame_width, frame_height=row.frame_height, fps=row.fps,
         stream_url=row.stream_url,
@@ -41,8 +51,10 @@ def _to_record(row: CameraRow) -> CameraRecord:
 
 
 def _aware(value: datetime | None) -> datetime | None:
-    # SQLite drops the timezone; PostgreSQL timestamptz keeps it.
-    return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+    # SQLite drops the timezone; PostgreSQL returns timestamptz in the session time zone.
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class SqlCameraStore:
@@ -52,16 +64,16 @@ class SqlCameraStore:
     def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
         now = datetime.now(timezone.utc)
         with self._sessions.begin() as session:
-            row = session.get(CameraRow, camera_id, with_for_update=True)
-            record = apply_report(_to_record(row) if row else None, camera_id, report, now)
-            if row is None:
-                row = CameraRow(id=camera_id, created_at=now)
-                session.add(row)
+            row = camera_row(session, camera_id, lock=True)
+            previous = _to_record(row) if row.last_report_at is not None else None
+            record = apply_report(previous, camera_id, report, now)
             row.reported_status = record.reported_status.value
             for field in ("last_report_at", "last_online_at", "last_error", "frame_width", "frame_height", "fps", "stream_url"):
                 setattr(row, field, getattr(record, field))
             return record
 
     def list(self) -> list[CameraRecord]:
+        # Cameras the AI service never reported (seed rows, cameras only named by events) have no status.
+        query = select(CameraRow).where(CameraRow.last_report_at.is_not(None)).order_by(CameraRow.name)
         with self._sessions() as session:
-            return [_to_record(row) for row in session.scalars(select(CameraRow).order_by(CameraRow.id))]
+            return [_to_record(row) for row in session.scalars(query)]

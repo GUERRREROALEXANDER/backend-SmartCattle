@@ -5,7 +5,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from app.core.config import Settings
 from app.db import create_db_engine
@@ -55,19 +55,46 @@ def test_sqlite_migrations_and_persistence(tmp_path, event_payload):
     assert {"cameras", "events", "alembic_version"} <= set(inspect(create_db_engine(url)).get_table_names())
     exercise_app(database_settings(url), event_payload)
     command.downgrade(alembic_config(url), "base")
-    assert set(inspect(create_db_engine(url)).get_table_names()) == {"alembic_version"}
+    # Only the backend's status columns go; the shared tables and their rows stay.
+    engine = create_db_engine(url)
+    assert "stream_url" not in {column["name"] for column in inspect(engine).get_columns("cameras")}
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM events")).scalar_one() == 2
+
+
+def test_rows_from_other_services_are_kept_and_not_listed(tmp_path, event_payload):
+    url = f"sqlite:///{(tmp_path / 'smartcattle.db').as_posix()}"
+    command.upgrade(alembic_config(url), "0001_shared_schema")
+    with create_db_engine(url).begin() as connection:
+        connection.execute(text("INSERT INTO cameras (name) VALUES ('Main camera')"))
+        connection.execute(text("INSERT INTO events (type, camera_id) VALUES ('cattle_out_of_zone', 1)"))
+    command.upgrade(alembic_config(url), "head")
+    with TestClient(create_app(database_settings(url))) as client:
+        # A seed camera without AI status and an event without ai_event_id are not API records.
+        assert client.get("/api/cameras").json()["total"] == 0
+        assert client.get("/api/events").json()["total"] == 0
+        assert client.post("/api/ai/events", json=event_payload).status_code == 201
+        assert client.get("/api/events").json()["total"] == 1
+    with create_db_engine(url).connect() as connection:
+        assert connection.execute(text("SELECT name FROM cameras ORDER BY id")).scalars().all() == [
+            "Main camera", "camera-01"]
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not set")
 def test_postgresql_migrations_and_persistence(event_payload):
+    # Use an empty test database: the first upgrade applies database/schema.sql to it.
     settings = database_settings(os.environ["TEST_DATABASE_URL"])
     assert settings.storage_name == "postgresql"
     config = alembic_config(settings.sqlalchemy_url)
     command.downgrade(config, "base")
     command.upgrade(config, "head")
+    engine = create_db_engine(settings.sqlalchemy_url)
     try:
         exercise_app(settings, event_payload)
     finally:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM events WHERE ai_event_id IS NOT NULL"))
+            connection.execute(text("DELETE FROM cameras WHERE name IN ('camera-01', 'camera-02')"))
         command.downgrade(config, "base")
 
 
