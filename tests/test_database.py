@@ -49,17 +49,31 @@ def exercise_app(settings: Settings, event_payload: dict) -> None:
         assert client.get("/api/cameras").json()["total"] == 1
 
 
-def test_sqlite_migrations_and_persistence(tmp_path, event_payload):
+def test_sqlite_migrations_and_persistence(tmp_path, event_payload, video_analysis_payload):
     url = f"sqlite:///{(tmp_path / 'smartcattle.db').as_posix()}"
     command.upgrade(alembic_config(url), "head")
-    assert {"cameras", "events", "alembic_version"} <= set(inspect(create_db_engine(url)).get_table_names())
-    exercise_app(database_settings(url), event_payload)
+    assert {
+        "cameras", "events", "video_analyses", "video_analysis_alerts", "alembic_version",
+    } <= set(inspect(create_db_engine(url)).get_table_names())
+    settings = database_settings(url)
+    exercise_app(settings, event_payload)
+    with TestClient(create_app(settings)) as client:
+        analysis = client.post("/api/videos/analyses", json=video_analysis_payload).json()
+        assert client.get("/api/events").json()["total"] == 3
+    with TestClient(create_app(settings)) as client:
+        assert client.get(f"/api/videos/analyses/{analysis['id']}").json() == analysis
+        assert client.get("/api/videos/analyses").json() == {"items": [analysis], "total": 1}
+        metrics = client.get("/api/metrics/summary", params={"since": analysis["created_at"]}).json()
+        assert metrics["animals_inside"] == 3
+        assert metrics["animals_outside"] == 1
+        assert metrics["alerts_since"] == 1
     command.downgrade(alembic_config(url), "base")
-    # Only the backend's status columns go; the shared tables and their rows stay.
+    # Only the backend-owned additions go; the shared tables and their rows stay.
     engine = create_db_engine(url)
     assert "stream_url" not in {column["name"] for column in inspect(engine).get_columns("cameras")}
+    assert not {"video_analyses", "video_analysis_alerts"} & set(inspect(engine).get_table_names())
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT count(*) FROM events")).scalar_one() == 2
+        assert connection.execute(text("SELECT count(*) FROM events")).scalar_one() == 3
 
 
 def test_rows_from_other_services_are_kept_and_not_listed(tmp_path, event_payload):
