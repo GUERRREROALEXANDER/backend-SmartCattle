@@ -42,3 +42,30 @@ class EventRow(Base):
     bbox: Mapped[list[float] | None] = mapped_column("box", JSON().with_variant(JSONB, "postgresql"))
     timestamp: Mapped[datetime] = mapped_column("detected_at", DateTime(timezone=True))
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VideoAnalysisRow(Base):
+    __tablename__ = "video_analyses"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    video_name: Mapped[str] = mapped_column(String(200))
+    duration_sec: Mapped[float] = mapped_column(Float)
+    frames_analyzed: Mapped[int] = mapped_column(Integer)
+    max_cattle: Mapped[int] = mapped_column(Integer)
+    max_people: Mapped[int] = mapped_column(Integer)
+    avg_confidence: Mapped[float] = mapped_column(Float)
+    outside_ratio: Mapped[float] = mapped_column(Float)
+    alert_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class VideoAnalysisAlertRow(Base):
+    __tablename__ = "video_analysis_alerts"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    analysis_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("video_analyses.id", ondelete="CASCADE"), index=True,
+    )
+    track_id: Mapped[int] = mapped_column(Integer)
+    cls: Mapped[str] = mapped_column(String(16))
+    time_sec: Mapped[float] = mapped_column(Float)
