@@ -19,6 +19,8 @@ class EventStore(Protocol):
 
     def list(self) -> list[Event]: ...
 
+    def list_since(self, start: datetime) -> "list[Event]": ...
+
 
 class InMemoryEventStore:
     """Thread-safe event storage used when DATABASE_URL is not set."""
@@ -36,6 +38,10 @@ class InMemoryEventStore:
     def list(self) -> list[Event]:
         with self._lock:
             return list(reversed(self._events))
+
+    def list_since(self, start: datetime) -> "list[Event]":
+        with self._lock:
+            return [event for event in self._events if event.timestamp >= start]
 
 
 def _aware(value: datetime) -> datetime:
@@ -71,6 +77,24 @@ class SqlEventStore:
         with self._sessions() as session:
             return [
                 # confidence is REAL (float4) in the shared schema: 0.95 reads back as 0.949999988.
+                Event(id=row.ai_event_id, event_type=row.event_type, camera_id=camera,
+                      detected_object=row.detected_object, confidence=float(f"{row.confidence:.6g}"),
+                      timestamp=_aware(row.timestamp), received_at=_aware(row.received_at), bbox=row.bbox)
+                for row, camera in session.execute(query)
+            ]
+
+    def list_since(self, start: datetime) -> "list[Event]":
+        # Metrics use detection time, and unlike the event feed this query has no 1000-row limit in SQL.
+        query = (
+            select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)
+            .where(
+                EventRow.ai_event_id.is_not(None), EventRow.received_at.is_not(None),
+                EventRow.timestamp >= start,
+            )
+            .order_by(EventRow.timestamp, EventRow.id)
+        )
+        with self._sessions() as session:
+            return [
                 Event(id=row.ai_event_id, event_type=row.event_type, camera_id=camera,
                       detected_object=row.detected_object, confidence=float(f"{row.confidence:.6g}"),
                       timestamp=_aware(row.timestamp), received_at=_aware(row.received_at), bbox=row.bbox)
