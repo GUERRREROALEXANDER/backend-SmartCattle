@@ -62,7 +62,7 @@ app/
 database/schema.sql        Copy of the shared database schema
 migrations/                Alembic environment and revisions
 alembic.ini
-render.yaml                Render Blueprint (backend + frontend static site)
+render.yaml                Render Blueprint (backend + frontend static site; PostgreSQL on Neon)
 data_structures/
 docs/ARCHITECTURE.md
 tests/
@@ -235,7 +235,7 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 
 ## Deploying on Render
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; it uses the team's shared PostgreSQL instead of creating a database. In Render: **New → Blueprint**, select this repository, then fill `ALLOWED_ORIGINS` with the frontend URL and `DATABASE_URL` with the shared database URL (the Internal Database URL if it is in the same Render account and region, otherwise the External one). `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
 
 ## Tests
 
@@ -297,4 +297,4 @@ python data_structures/linked_list_smartcattle.py
 
 ## Current state
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository. The database is the team's shared PostgreSQL, not part of the blueprint. In Render: **New → Blueprint**, select this repository, enter `DATABASE_URL` when asked and apply. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL` and apply. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
