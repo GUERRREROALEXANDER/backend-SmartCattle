@@ -10,9 +10,10 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
-from app.routes import animals, cameras, events, health
+from app.routes import animals, cameras, events, health, metrics, videos
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
+from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="SmartCattle Backend", version=__version__,
         description=(
-            "REST API for receiving AI cattle events and camera status, and querying animals, events and cameras. "
+            "REST API for AI cattle events, camera status, simulated video analyses and summary metrics. "
             "Data is stored in PostgreSQL when DATABASE_URL is set, in memory otherwise."
         ),
     )
@@ -32,11 +33,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.sqlalchemy_url is None:
         app.state.event_store = InMemoryEventStore()
         app.state.camera_store = InMemoryCameraStore()
+        app.state.video_analysis_store = InMemoryVideoAnalysisStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         sessions = create_session_factory(create_db_engine(settings.sqlalchemy_url))
         app.state.event_store = SqlEventStore(sessions)
         app.state.camera_store = SqlCameraStore(sessions)
+        app.state.video_analysis_store = SqlVideoAnalysisStore(sessions)
     if settings.ai_api_key is None:
         logger.warning("AI_API_KEY is not set; POST /api/ai/events accepts unauthenticated requests")
     app.add_middleware(
@@ -47,6 +50,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(animals.router)
     app.include_router(events.router)
     app.include_router(cameras.router)
+    app.include_router(videos.router)
+    app.include_router(metrics.router)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
