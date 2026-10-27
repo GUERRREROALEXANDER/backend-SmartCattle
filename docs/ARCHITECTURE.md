@@ -30,9 +30,9 @@ inference and camera capture, and also served the static frontend.
 
 ## 2. Backend responsibility
 
-In scope: REST API, receiving and validating AI events, querying animals and
-events, configuration, CORS. Later: PostgreSQL, notifications,
-authentication and camera management.
+In scope: REST API, receiving and validating AI events and simulated video
+summaries, querying animals, events, analyses and metrics, configuration and
+CORS. Later: notifications and authentication.
 
 Out of scope: YOLO, OpenCV, model weights, camera capture, frame or video
 processing, HTML/CSS/JS.
@@ -43,9 +43,9 @@ processing, HTML/CSS/JS.
 app/
   main.py            create_app(): CORS, routers, error handler
   core/config.py     Settings (environment variables)
-  routes/            health.py, animals.py, events.py
-  schemas/           animal.py, event.py, status.py (Pydantic contracts)
-  services/          event_store.py (in-memory store)
+  routes/            health.py, animals.py, events.py, cameras.py, videos.py, metrics.py
+  schemas/           animal.py, event.py, camera.py, video_analysis.py, metrics.py, status.py
+  services/          memory and SQL event, camera and video analysis stores
 tests/
 ```
 
@@ -77,9 +77,9 @@ both assigned by the backend.
 
 ## 5. Persistence
 
-`EventStore` and `CameraStore` define the methods used by routes. Each has an
+`EventStore`, `CameraStore` and `VideoAnalysisStore` define the methods used by routes. Each has an
 in-memory implementation (development and tests, data lost on restart) and a
-SQL implementation (`SqlEventStore`, `SqlCameraStore`) used when
+SQL implementation (`SqlEventStore`, `SqlCameraStore`, `SqlVideoAnalysisStore`) used when
 `DATABASE_URL` is set. See section 8 for the PostgreSQL decisions.
 
 Animals: the prototype does not identify individual animals, so
@@ -121,15 +121,17 @@ there) and pushes data over HTTPS; it never receives database credentials.
 **Shared schema (updated 2026-10-07).** The database belongs to the team's
 [database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle)
 (`cameras`, `zones`, `users`, `animals`, `events`, `alerts`);
-`database/schema.sql` is a copy. The backend adapts to it instead of owning
-its own tables. It uses:
+`database/schema.sql` is a copy. The backend adapts to the shared tables and
+owns only the additive video analysis tables. It uses:
 
 | Table | How the backend uses it |
 |---|---|
 | `events` | Persists `POST /api/ai/events`. The API UUID is `ai_event_id` (unique), `received_at` is the receipt time; both columns were added to the shared schema for this backend. |
 | `cameras` | The API camera id is `cameras.name`. A first status report or event creates the row, because `events.camera_id` is a foreign key to `cameras.id`. The backend adds the nullable status columns. |
+| `video_analyses` | Backend-owned summary of a simulated frontend video analysis. |
+| `video_analysis_alerts` | Backend-owned timed cattle/person tracks belonging to one analysis; `analysis_id` cascades on analysis deletion. |
 
-The backend does not write `zones`, `users`, `animals` or `alerts` yet.
+The backend does not write `zones`, `users`, `animals` or the shared `alerts` table yet.
 
 Not stored, on purpose: **per-frame detections.** YOLO runs several times per
 second; storing every detection would flood the database with data nobody
@@ -138,9 +140,10 @@ the bounding box.
 
 **Schema management.** `alembic upgrade head` runs before Uvicorn on Render.
 The first revision applies `database/schema.sql` only to an empty database and
-never alters an existing one; the second adds the camera status columns. The
-application never calls `create_all`. On SQLite, which the tests use, the
-first revision creates the `cameras` and `events` columns the backend maps.
+never alters an existing one; the second adds the camera status columns; the
+third creates only the backend-owned video analysis tables. The application
+never calls `create_all`. On SQLite, which the tests use, the first revision
+creates the `cameras` and `events` columns the backend maps.
 
 **Effective camera status.** The AI reports `online`, `error` or `offline`
 through `PUT /api/ai/cameras/{id}/status` every few seconds. `GET /api/cameras`
@@ -158,3 +161,11 @@ cannot be stored and later shown in the frontend.
 **Video.** The backend does not proxy or store video. Live video, when the
 camera stream is confirmed, goes from a local media server on the farm PC to
 the browser (see the AI repository README); the backend only stores state.
+
+## 9. Simulated video analyses and summary metrics
+
+The frontend performs the simulated analysis and posts only its summary; video bytes, frames and YOLO output remain outside this backend. `POST /api/videos/analyses` stores the summary and its timed alerts in the two backend-owned tables. List and detail routes use the same `VideoAnalysis` response contract, and list responses are capped to 100 rows per request.
+
+Each cattle alert is also represented as the existing `cattle_out_of_zone` event so event-driven metrics include uploads. The API camera id is `video-upload`; this is valid in the existing `cameras.name`/`events.camera_id` mapping and requires no schema alteration. Person alerts have no corresponding event type and remain only in `video_analysis_alerts`. Upload-generated events use `created_at` because a relative video offset cannot establish the original recording time.
+
+Summary metrics deliberately expose their data limitations. Animal inside/outside values are estimates from the latest analysis (distinct outside cattle tracks versus `max_cattle`), not a live herd registry. Event counts and the trailing-hour rate use UTC `detected_at` values from API-ingested events. The rate is stored events divided by 60, not raw frame detections. In-memory metrics are limited to the events retained by the existing 1000-event deque; SQL metric queries are not subject to the event feed's 1000-row response limit.

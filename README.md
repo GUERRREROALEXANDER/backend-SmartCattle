@@ -42,21 +42,27 @@ app/
   __init__.py
   main.py                  create_app(): picks SQL or memory stores
   db.py                    SQLAlchemy Base, engine and sessions
-  models.py                cameras and events tables
+  models.py                shared cameras/events and backend-owned video analysis tables
   core/config.py
   routes/health.py
   routes/animals.py
   routes/events.py
   routes/cameras.py
+  routes/videos.py
+  routes/metrics.py
   schemas/animal.py
   schemas/camera.py
   schemas/event.py
+  schemas/video_analysis.py
+  schemas/metrics.py
   schemas/status.py
   services/event_store.py  memory and SQL event stores
   services/camera_store.py memory and SQL camera stores
+  services/video_analysis_store.py memory and SQL analysis stores
+database/schema.sql        Copy of the shared database schema
 migrations/                Alembic environment and revisions
 alembic.ini
-render.yaml                Render Blueprint (backend + frontend static site; PostgreSQL on Neon)
+render.yaml                Render Blueprint (backend + frontend static site)
 data_structures/
 docs/ARCHITECTURE.md
 tests/
@@ -107,7 +113,13 @@ In PowerShell, use `$env:PORT` for an environment variable. Without `DATABASE_UR
 
 ## Database
 
-Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events and cameras are stored in PostgreSQL. The schema is created **only** by Alembic migrations, never at application startup.
+Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events, cameras and video analyses are stored in PostgreSQL. The shared schema is owned by the [database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle); `database/schema.sql` is a copy of it (commit `baa9ef4`). The application never creates tables at startup. `alembic upgrade head` does three things:
+
+1. `0001_shared_schema` applies `database/schema.sql` only if the database has no `cameras` table yet. An existing shared database is left as it is.
+2. `0002_camera_status` adds the nullable camera status columns the backend needs to `cameras`: `reported_status`, `last_report_at`, `last_online_at`, `last_error`, `frame_width`, `frame_height`, `fps` and `stream_url`.
+3. `0003_video_analyses` creates the backend-owned `video_analyses` and `video_analysis_alerts` tables. It does not alter any existing table.
+
+Alembic also creates its own `alembic_version` table. `alembic downgrade base` removes the video analysis tables and status columns; the shared tables and their rows stay.
 
 Local PostgreSQL (replace the placeholders; never commit real credentials):
 
@@ -119,12 +131,20 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-`postgres://` and `postgresql://` URLs (the form Render provides) are rewritten to the psycopg 3 driver automatically. Roll back with `alembic downgrade base`.
+`postgres://` and `postgresql://` URLs (the form Render provides) are rewritten to the psycopg 3 driver automatically.
 
-| Table | Content |
+How the API maps to the shared tables:
+
+| API | Database |
 | --- | --- |
-| `cameras` | One row per camera that ever reported status: last reported status, last report time, last time online, last error, resolution and FPS |
-| `events` | AI events (`cattle_out_of_zone`), with optional bounding box |
+| Camera `id` (`camera-01`) | `cameras.name`. A camera named for the first time by a status report or an event gets a row. |
+| `GET /api/cameras` | Only cameras with `last_report_at`; seed rows such as `Main camera` are not listed until the AI reports them. |
+| Event `id` (UUID) | `events.ai_event_id`. `event_type` → `type`, `timestamp` → `detected_at`, `bbox` → `box`, `camera_id` → FK to `cameras.id`. |
+| `GET /api/events` | Only events with `ai_event_id` and `received_at`, i.e. those ingested through this API. |
+| `POST /api/videos/analyses` | A `video_analyses` row plus one `video_analysis_alerts` row per submitted alert. `alert_count` is derived from the array length. |
+| `GET /api/videos/analyses` | Backend-owned analyses, newest `created_at` first, with their alerts. |
+
+`events.confidence` is `REAL` in the shared schema, so values are read back rounded to six significant digits.
 
 Per-frame detections are not stored: the AI only sends relevant events. See [ARCHITECTURE.md](docs/ARCHITECTURE.md#8-postgresql-and-camera-status).
 
@@ -140,6 +160,24 @@ Per-frame detections are not stored: the AI only sends relevant events. See [ARC
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
 | PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
+| POST | `/api/videos/analyses` | Stores a simulated video analysis; returns 201 with the analysis and alerts |
+| GET | `/api/videos/analyses?limit=20` | Latest analyses first; `limit` defaults to 20 and accepts 1–100 |
+| GET | `/api/videos/analyses/{id}` | One analysis with its alerts, or a JSON 404 |
+| GET | `/api/metrics/summary?since=<ISO>` | Event rates and latest-analysis animal estimates; `since` is optional and timezone-aware |
+
+### Video analyses and metrics
+
+For a frontend `API_BASE` of `http://localhost:8000/api`, `${API_BASE}/videos/analyses` resolves to `http://localhost:8000/api/videos/analyses`. If the configured base is only `http://localhost:8000`, append `/api/videos/analyses` instead. The metrics route follows the same rule: `/api/metrics/summary`.
+
+`POST /api/videos/analyses` accepts `video_name`, `duration_sec`, `frames_analyzed`, `max_cattle`, `max_people`, `alerts`, `avg_confidence` and `outside_ratio`. Counts, track ids and seconds must be non-negative; confidence and ratio must be finite numbers from 0 to 1. Names are trimmed and limited to 200 characters, and at most 500 alerts are accepted. Each alert has `track_id`, `cls` (`cattle` or `person`) and `time_sec`. Unknown fields are rejected. The response adds a UUID `id`, an integer alert `id`, `alert_count` and `created_at`.
+
+Every cattle alert also creates a `cattle_out_of_zone` event with `camera_id: "video-upload"`, `detected_object: "cow"` and the analysis average confidence. The existing schema permits that camera name, so no shared column is changed; a camera row is created if needed but does not appear in `GET /api/cameras` without a status report. The shared `events.source` keeps its default. Person alerts do not create events. Because `time_sec` has no recording wall-clock reference, all generated events use the analysis `created_at` as their detection timestamp; the relative time remains in `video_analysis_alerts`.
+
+`GET /api/metrics/summary` returns `animals_inside`, `animals_outside`, `alerts_today`, `alerts_since` and `detections_per_minute`. Its assumptions are:
+
+- Animal counts are null until an analysis exists. Otherwise, distinct cattle `track_id` values in the latest analysis estimate the outside count (capped at `max_cattle`), and the remainder is inside. They are not live individual-animal locations.
+- Alert counts use API-ingested event detection timestamps in UTC. `alerts_today` starts at 00:00 UTC; `alerts_since` is null without `since` and otherwise counts timestamps from `since` through the current time.
+- `detections_per_minute` is the number of stored API events in the trailing 60 minutes divided by 60. It is an event rate, not a per-frame YOLO detection rate. Future-dated events are excluded.
 
 ### Camera status
 
@@ -170,6 +208,8 @@ Set `BACKEND_BASE_URL` in the frontend to `http://localhost:8000` for local deve
 | `/api/animals` | `{"items":[],"total":0}` |
 | `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
 | `/api/cameras` | `{"items":[{"id":"camera-01","reported_status":"online","status":"online","last_report_at":"<UTC>","last_online_at":"<UTC>","last_error":null,"frame_width":1280,"frame_height":720,"fps":14.8}],"total":1}` (no camera yet: `{"items":[],"total":0}`) |
+| `/api/videos/analyses` | `{"items":[{"id":"<uuid>","video_name":"pasture-test.mp4","duration_sec":12.5,"frames_analyzed":125,"max_cattle":4,"max_people":1,"alerts":[{"track_id":7,"cls":"cattle","time_sec":3.2,"id":1}],"avg_confidence":0.91,"outside_ratio":0.25,"alert_count":1,"created_at":"<UTC>"}],"total":1}` |
+| `/api/metrics/summary` | `{"animals_inside":3,"animals_outside":1,"alerts_today":2,"alerts_since":null,"detections_per_minute":0.03333333333333333}` (`since` adds an integer `alerts_since`; animal counts may be null) |
 
 Validation errors (422) use `{"detail":[{"type":"<error type>","loc":["body","<field>"],"msg":"<message>"}]}`. Error objects may also contain safe `ctx` details, but never the submitted `input`. Errors 401, 404, and 500 use a string in `detail`. Timestamps are ISO 8601 with a timezone. `/api/events` is newest first and retains at most 1000 events. Confidence must be a finite number between 0 and 1 inclusive.
 
@@ -195,7 +235,7 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 
 ## Deploying on Render
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; it uses the team's shared PostgreSQL instead of creating a database. In Render: **New → Blueprint**, select this repository, then fill `ALLOWED_ORIGINS` with the frontend URL and `DATABASE_URL` with the shared database URL (the Internal Database URL if it is in the same Render account and region, otherwise the External one). `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
 
 ## Tests
 
@@ -203,7 +243,7 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 python -m pytest -q
 ```
 
-Tests cover endpoints, event and camera status validation, shared-key protection, CORS, configuration, error handling, per-app isolation, the 1000-event storage limit, and Alembic migrations plus SQL persistence on a temporary SQLite database. To also run them against a real PostgreSQL database (it is migrated up and back down, so use an empty test database):
+Tests cover endpoints, event/camera/video validation, video-to-event mapping, summary metric windows, shared-key protection, CORS, configuration, error handling, per-app isolation, the 1000-event storage limit, and Alembic migrations plus SQL persistence on a temporary SQLite database. To also run them against a real PostgreSQL database (use an empty test database, never the shared one: the first run applies `database/schema.sql`, and the test deletes the rows it creates):
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql://USER:PASSWORD@localhost:5432/smartcattle_test"
@@ -257,4 +297,4 @@ python data_structures/linked_list_smartcattle.py
 
 ## Current state
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL` and apply. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository. The database is the team's shared PostgreSQL, not part of the blueprint. In Render: **New → Blueprint**, select this repository, enter `DATABASE_URL` when asked and apply. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
