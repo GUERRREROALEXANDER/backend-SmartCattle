@@ -355,7 +355,43 @@ curl -X POST http://localhost:8000/api/ai/events \
   -d '{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z"}'
 ```
 
-The backend assigns `id` and `received_at`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. The optional `bbox` is `[x1, y1, x2, y2]` in frame pixels: four finite numbers ≥ 0 with `x1 < x2` and `y1 < y2`. Extra fields and unknown event types are rejected.
+The backend assigns `id`, `received_at` and `level`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. The optional `bbox` is `[x1, y1, x2, y2]` in frame pixels: four finite numbers ≥ 0 with `x1 < x2` and `y1 < y2`. Extra fields and unknown event types are rejected.
+
+**Do not send `level`.** The request is rejected if you do. The AI service
+reports what it saw and how sure it is; the backend derives the severity from
+the confidence, so every event on the farm is ranked by one rule rather than
+two.
+
+### Reporting an individual animal
+
+Once the vision service can identify an individual and not only the class
+`cow`, it records the sighting against the ear tag:
+
+```sh
+curl -X PUT http://localhost:8000/api/animals/A-441/detection   -H 'Content-Type: application/json'   -H 'X-API-Key: example-shared-key'   -d '{"camera_id":"camera-01","detected_at":"2026-10-29T15:30:00Z"}'
+```
+
+Same `X-API-Key` as the events endpoint, because the caller is the same
+service. It updates `animals.last_detection` and, when `camera_id` is given,
+where the animal was last seen. An unknown tag is a 404: the backend does not
+invent an animal from a sighting, since the herd is registered by the farm
+staff.
+
+This endpoint is not used yet. It exists because the column it writes has been
+in the shared schema from the start, and the contract belongs next to the rest
+of the animal routes rather than being invented later under time pressure.
+
+### Reading the safe zone
+
+The zone the AI service compares detections against now lives in the database
+and is served by `GET /api/zones?camera_id=camera-01`. It needs a user token,
+not the AI key -- which is a gap: the vision service has no account. Until that
+is resolved it keeps using its local configuration, and the endpoint exists for
+the frontend's zone editor.
+
+Coordinates are normalised from 0 to 1, not pixels, so the same zone holds
+whatever resolution the service processes at. `outline` is an optional polygon;
+when it is absent the rectangle applies.
 
 ## Data structure examples
 
