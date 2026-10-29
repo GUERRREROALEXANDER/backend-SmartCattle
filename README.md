@@ -182,7 +182,7 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | POST | `/api/zones/camera/{camera_id}` | Configures a safe zone (**owner**) |
 | PATCH | `/api/zones/{id}` | Partial update (**owner**); the geometry is replaced as a whole |
 | DELETE | `/api/zones/{id}` | Removes a zone (**owner**) |
-| GET | `/api/events` | Stored events with their severity, most recently received first (at most 1000), and total |
+| GET | `/api/events` | Event feed, newest received first. Filters: `camera_id`, `level`, `event_type`; paging: `limit` (1–200, default 50) and `offset` |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
 | PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
@@ -204,6 +204,27 @@ Every cattle alert also creates a `cattle_out_of_zone` event with `camera_id: "v
 - Animal counts are null until an analysis exists. Otherwise, distinct cattle `track_id` values in the latest analysis estimate the outside count (capped at `max_cattle`), and the remainder is inside. They are not live individual-animal locations.
 - Alert counts use API-ingested event detection timestamps in UTC. `alerts_today` starts at 00:00 UTC; `alerts_since` is null without `since` and otherwise counts timestamps from `since` through the current time.
 - `detections_per_minute` is the number of stored API events in the trailing 60 minutes divided by 60. It is an event rate, not a per-frame YOLO detection rate. Future-dated events are excluded.
+
+### Event feed
+
+`GET /api/events` pages and filters. `total` is the number of events matching
+the filters, **not** the number returned, so a client can tell whether another
+page exists without asking twice:
+
+```
+GET /api/events?camera_id=camera-01&level=high&limit=20&offset=0
+```
+
+`level` is `low`, `medium` or `high`, derived by the backend from the
+detection confidence (at or above 0.9 is high, below 0.6 is low). It is **not
+accepted from the caller**: the AI service reports what it saw and how sure it
+is, and how urgent that makes it is a decision about this farm, so keeping it
+on one side of the boundary is what guarantees every event is ranked by the
+same rule.
+
+An offset past the end returns an empty `items` with the unchanged `total`.
+The store keeps at most 1000 events, so that is the ceiling on what any
+sequence of pages can reach.
 
 ### Camera status
 
