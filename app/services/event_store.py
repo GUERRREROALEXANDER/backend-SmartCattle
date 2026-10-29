@@ -8,7 +8,13 @@ from sqlalchemy import ColumnElement, Select, func, select
 
 from app.db import SessionFactory
 from app.models import CameraRow, EventRow
-from app.schemas.event import AIEventCreate, Event, EventType
+from app.schemas.event import (
+    AIEventCreate,
+    Event,
+    EventLevel,
+    EventType,
+    level_for_confidence,
+)
 from app.services.camera_store import camera_row
 
 MAX_LISTED_EVENTS = 1000
@@ -39,7 +45,10 @@ class InMemoryEventStore:
 
     def add(self, data: AIEventCreate, received_at: datetime) -> Event:
         with self._lock:
-            event = Event(**data.model_dump(), id=uuid4(), received_at=received_at)
+            event = Event(
+                **data.model_dump(), id=uuid4(), received_at=received_at,
+                level=level_for_confidence(data.confidence),
+            )
             self._events.append(event)
             return event
 
@@ -90,13 +99,31 @@ def _listable_conditions() -> list[ColumnElement[bool]]:
 def _to_event(row: EventRow, camera: str) -> Event:
     assert row.ai_event_id is not None and row.received_at is not None  # noqa: S101 - guaranteed by _listable_events
     assert row.detected_object is not None and row.confidence is not None  # noqa: S101
+    # confidence is REAL (float4) in the shared schema: 0.95 reads back as 0.949999988.
+    confidence = float(f"{row.confidence:.6g}")
     return Event(
         id=row.ai_event_id, event_type=EventType(row.event_type), camera_id=camera,
         detected_object=row.detected_object,
-        # confidence is REAL (float4) in the shared schema: 0.95 reads back as 0.949999988.
-        confidence=float(f"{row.confidence:.6g}"),
+        confidence=confidence,
+        # The stored level is authoritative. Rows written before this backend
+        # populated the column carry the schema default, which is indistinguishable
+        # from a genuine 'medium', so they are read as stored rather than
+        # recomputed -- recomputing would silently rewrite history.
+        level=_level(row.level, confidence),
         timestamp=_aware(row.timestamp), received_at=_aware(row.received_at), bbox=row.bbox,
     )
+
+
+def _level(stored: str | None, confidence: float) -> EventLevel:
+    """The stored severity, or a derived one when another service left it NULL."""
+    if stored is None:
+        return level_for_confidence(confidence)
+    try:
+        return EventLevel(stored)
+    except ValueError:
+        # A value outside the CHECK, which only a database predating it could
+        # hold. Derive rather than fail the whole listing.
+        return level_for_confidence(confidence)
 
 
 def _aware(value: datetime) -> datetime:
@@ -111,12 +138,16 @@ class SqlEventStore:
         self._sessions = session_factory
 
     def add(self, data: AIEventCreate, received_at: datetime) -> Event:
-        event = Event(**data.model_dump(), id=uuid4(), received_at=received_at)
+        event = Event(
+            **data.model_dump(), id=uuid4(), received_at=received_at,
+            level=level_for_confidence(data.confidence),
+        )
         with self._sessions.begin() as session:
             # events.camera_id references cameras.id, so a camera seen for the first time gets a row.
             camera = camera_row(session, event.camera_id)
             session.add(EventRow(
-                ai_event_id=event.id, event_type=event.event_type.value, camera_id=camera.id,
+                ai_event_id=event.id, event_type=event.event_type.value,
+                level=event.level.value, camera_id=camera.id,
                 detected_object=event.detected_object, confidence=event.confidence, bbox=event.bbox,
                 timestamp=event.timestamp, received_at=event.received_at,
             ))
