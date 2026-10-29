@@ -117,7 +117,8 @@ class TokenResponse(BaseModel):
     }]})
 
     access_token: str
-    # noqa S105: "bearer" is the OAuth 2 token type from RFC 6750, not a secret.
+    # The suppression below: "bearer" is the OAuth 2 token type from
+    # RFC 6750, which bandit reads as a hardcoded password.
     token_type: str = "bearer"  # noqa: S105
     expires_in: int = Field(description="Token lifetime in seconds")
     # Returned with the token so the frontend does not need a second request
