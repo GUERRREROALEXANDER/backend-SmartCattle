@@ -293,15 +293,39 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 
 ## Deploying on Render
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's
+`SMARTCATTLE_API_KEY` on the local PC. `JWT_SECRET` is generated too, so the
+deployment never starts with authentication off -- but note that replacing it
+by hand signs every user out, because tokens are verified against it and there
+is no session table. Each deploy runs `alembic upgrade head` before starting
+Uvicorn.
+
+The first account registered on a fresh deployment becomes the owner; see
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
 
 ## Tests
 
 ```sh
-python -m pytest -q
+ruff check .   # lint
+mypy           # strict type check on app/ and data_structures/
+pytest -q      # tests
 ```
 
-Tests cover endpoints, event/camera/video validation, video-to-event mapping, summary metric windows, shared-key protection, CORS, configuration, error handling, per-app isolation, the 1000-event storage limit, and Alembic migrations plus SQL persistence on a temporary SQLite database. To also run them against a real PostgreSQL database (use an empty test database, never the shared one: the first run applies `database/schema.sql`, and the test deletes the rows it creates):
+CI runs the same three on every push, plus an Alembic round trip against an
+empty database. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Tests cover endpoints, authentication and roles, password hashing and token
+handling, the login throttle, the herd and safe zone registries, event
+filtering and paging, event/camera/video validation, video-to-event mapping,
+summary metric windows, shared-key protection, the published OpenAPI contract,
+CORS, request correlation, configuration, error handling, per-app isolation,
+the 1000-event storage limit, the data structure examples, and Alembic
+migrations plus SQL persistence on a temporary SQLite database.
+
+The suite runs bcrypt at its minimum cost through an autouse fixture, because
+the work factor is the point in production and buys nothing in a test.
+`tests/test_security.py` pins the production value by reading the source, so
+lowering it here cannot hide a change to the real one. To also run them against a real PostgreSQL database (use an empty test database, never the shared one: the first run applies `database/schema.sql`, and the test deletes the rows it creates):
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql://USER:PASSWORD@localhost:5432/smartcattle_test"
@@ -355,4 +379,12 @@ python data_structures/linked_list_smartcattle.py
 
 ## Current state
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL` and apply. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL` and apply. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's
+`SMARTCATTLE_API_KEY` on the local PC. `JWT_SECRET` is generated too, so the
+deployment never starts with authentication off -- but note that replacing it
+by hand signs every user out, because tokens are verified against it and there
+is no session table. Each deploy runs `alembic upgrade head` before starting
+Uvicorn.
+
+The first account registered on a fresh deployment becomes the owner; see
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
