@@ -11,6 +11,11 @@ readme = "README.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Lets `pytest` import the app package from the repository root, the same way
+# alembic.ini does it with prepend_sys_path. Without this only the
+# `python -m pytest` form works, because that one puts the working directory
+# on sys.path itself.
+pythonpath = ["."]
 # Treat warnings as errors so a deprecation in FastAPI, SQLAlchemy or Pydantic
 # surfaces in CI instead of the day the dependency drops the feature.
 filterwarnings = [
