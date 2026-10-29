@@ -71,3 +71,49 @@ def test_animal_counts_come_from_latest_analysis(auth_client, video_analysis_pay
 def test_metrics_since_requires_an_aware_iso_timestamp(client, since):
     response = client.get(METRICS_URL, params={"since": since})
     assert response.status_code == 422
+
+
+def test_counts_exclude_rows_the_feed_cannot_show(tmp_path, event_payload):
+    """The metrics and the event feed must agree about which rows exist.
+
+    A row another service wrote without the columns the Event schema requires
+    is not listed, so counting it would report more alerts than the dashboard
+    can display, with no way to explain the gap from outside.
+    """
+    from uuid import uuid4
+
+    from alembic import command
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    from app.db import create_db_engine
+    from app.main import create_app
+    from tests.test_database import alembic_config, database_settings, sign_in
+
+    url = f"sqlite:///{(tmp_path / 'metrics.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    engine = create_db_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("INSERT INTO cameras (name) VALUES ('camera-09')"))
+            camera = connection.execute(
+                text("SELECT id FROM cameras WHERE name = 'camera-09'")
+            ).scalar_one()
+            # Complete except for confidence: not listable, so not countable.
+            connection.execute(text(
+                "INSERT INTO events (type, camera_id, detected_object, confidence,"
+                " detected_at, received_at, ai_event_id)"
+                " VALUES ('cattle_out_of_zone', :c, 'cow', NULL, :t, :t, :e)"
+            ), {"c": camera, "t": "2026-10-29 00:30:00+00:00", "e": str(uuid4())})
+
+        settings = database_settings(url)
+        with TestClient(create_app(settings)) as client:
+            sign_in(client)
+            assert client.get("/api/events").json()["total"] == 0
+            assert client.get("/api/metrics/summary").json()["alerts_today"] == 0
+
+            # And an event this API did ingest is listed.
+            client.post("/api/ai/events", json=event_payload)
+            assert client.get("/api/events").json()["total"] == 1
+    finally:
+        engine.dispose()
