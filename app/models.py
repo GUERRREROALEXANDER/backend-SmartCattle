@@ -109,6 +109,36 @@ class AnimalRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ZoneRow(Base):
+    """The shared zones table: the safe zone of a camera.
+
+    Coordinates are normalised from 0 to 1 and not stored in pixels. A zone in
+    pixels is tied to the resolution it was drawn at, so swapping the camera,
+    or the AI service processing at a different size, moves the zone without
+    anyone touching it.
+    """
+
+    __tablename__ = "zones"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    # NOT NULL with ON DELETE CASCADE: a zone without a camera means nothing.
+    camera_id: Mapped[int] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="CASCADE"),
+    )
+    name: Mapped[str] = mapped_column(Text)
+    x_min: Mapped[float] = mapped_column(Float)
+    y_min: Mapped[float] = mapped_column(Float)
+    x_max: Mapped[float] = mapped_column(Float)
+    y_max: Mapped[float] = mapped_column(Float)
+    active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Optional polygon, added to the shared schema by its migration 0020. When
+    # present it defines the zone and the rectangle is its bounding box.
+    outline: Mapped[list[dict[str, float]] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+    )
+
+
 class VideoAnalysisRow(Base):
     __tablename__ = "video_analyses"
 
