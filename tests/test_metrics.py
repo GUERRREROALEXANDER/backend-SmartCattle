@@ -25,7 +25,9 @@ def test_metrics_use_utc_detection_windows(client, event_payload):
     assert response.status_code == 200
     assert response.json() == {
         "animals_inside": None, "animals_outside": None,
-        "alerts_today": 2, "alerts_since": 1, "detections_per_minute": pytest.approx(1 / 60),
+        "alerts_today": 2, "alerts_since": 1, # Rounded to three decimals: 1/60 is 0.0167, and the API does not
+            # publish sixteen digits for a count over a fixed window.
+            "detections_per_minute": 0.017,
     }
 
 
@@ -35,7 +37,7 @@ def test_metrics_without_since_omit_that_count(client, event_payload):
     metrics = client.get(METRICS_URL).json()
     assert metrics["alerts_today"] == 1
     assert metrics["alerts_since"] is None
-    assert metrics["detections_per_minute"] == pytest.approx(1 / 60)
+    assert metrics["detections_per_minute"] == 0.017
 
 
 def test_animal_counts_come_from_latest_analysis(auth_client, video_analysis_payload):
@@ -117,3 +119,20 @@ def test_counts_exclude_rows_the_feed_cannot_show(tmp_path, event_payload):
             assert client.get("/api/events").json()["total"] == 1
     finally:
         engine.dispose()
+
+
+def test_the_detection_rate_is_rounded(client, event_payload):
+    # The raw division serialises as 0.03333333333333333: sixteen digits of
+    # precision for a count of whole events over a fixed window.
+    client.post("/api/ai/events", json=event_payload | {
+        "timestamp": datetime.now(UTC).isoformat(),
+    })
+    rate = client.get(METRICS_URL).json()["detections_per_minute"]
+    assert rate == 0.017
+    assert len(str(rate).split(".")[1]) <= 3
+
+
+def test_an_empty_window_is_zero_not_null(client):
+    # Zero is a measurement; null would mean "unknown" and the frontend draws
+    # the two differently.
+    assert client.get(METRICS_URL).json()["detections_per_minute"] == 0.0

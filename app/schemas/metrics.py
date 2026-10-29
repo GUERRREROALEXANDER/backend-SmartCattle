@@ -10,4 +10,6 @@ class MetricsSummary(BaseModel):
     )
     alerts_today: int = Field(description="Stored events detected since 00:00 UTC today")
     alerts_since: int | None = Field(description="Stored events detected at or after the optional since timestamp")
-    detections_per_minute: float = Field(description="Stored events in the trailing hour divided by 60")
+    detections_per_minute: float = Field(
+        description="Stored events in the trailing hour divided by 60, to three decimals",
+    )

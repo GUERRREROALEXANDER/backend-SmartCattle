@@ -49,5 +49,8 @@ def metrics_summary(
         alerts_since=(
             event_store.count_between(since_utc, now) if since_utc is not None else None
         ),
-        detections_per_minute=detections / 60,
+        # Rounded: the raw division serialises as 0.03333333333333333, which
+        # is sixteen digits of precision the measurement does not have -- it
+        # is a count of whole events over a fixed window.
+        detections_per_minute=round(detections / 60, 3),
     )
