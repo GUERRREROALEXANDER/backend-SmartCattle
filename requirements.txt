@@ -4,3 +4,8 @@ pydantic-settings>=2.7,<3.0
 sqlalchemy>=2.0,<3.0
 alembic>=1.14,<2.0
 psycopg[binary]>=3.2,<4.0
+# Password hashing. bcrypt directly rather than passlib: passlib is
+# unmaintained and its bcrypt backend breaks against bcrypt 4+.
+bcrypt>=4.2,<6.0
+# Access tokens.
+pyjwt>=2.10,<3.0
