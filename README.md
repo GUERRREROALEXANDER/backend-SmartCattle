@@ -403,7 +403,14 @@ Independent academic examples demonstrate how data structures could apply to Sma
 | List/Array | Indexed access and traversal | Currently detected animals |
 | Stack | LIFO | Recent event history |
 | Queue | FIFO | Pending events |
-| Linked list | Linked nodes | Event sequence |
+| Singly linked list | Nodes with one link | Event sequence |
+| Doubly linked list | Nodes with two links (`prev`, `next`) | Event history reviewed in both directions |
+| Doubly circular list | A ring with two links | Camera rotation in the live view |
+
+The last two exist because a specific screen needs what one link cannot give:
+the event review moves backwards, and the camera carousel has no end. Each
+module's docstring states what it buys and what it costs -- a ring, notably,
+has no traversal that terminates by itself.
 
 Run from the repository root:
 
@@ -412,6 +419,8 @@ python data_structures/array_smartcattle.py
 python data_structures/stack_smartcattle.py
 python data_structures/queue_smartcattle.py
 python data_structures/linked_list_smartcattle.py
+python data_structures/doubly_linked_list_smartcattle.py
+python data_structures/circular_list_smartcattle.py
 ```
 
 ## Current state
