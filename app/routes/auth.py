@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.config import Settings
 from app.core.security import create_access_token
@@ -40,7 +40,6 @@ def _token(user: StoredUser, settings: Settings, secret: str, clock: Clock) -> T
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(
     data: UserCreate,
-    request: Request,
     store: UserStore = Depends(get_user_store),
     settings: Settings = Depends(get_app_settings),
     secret: str = Depends(require_jwt_secret),
