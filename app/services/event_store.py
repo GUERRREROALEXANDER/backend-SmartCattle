@@ -5,8 +5,8 @@ from typing import Protocol
 from uuid import uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
 
+from app.db import SessionFactory
 from app.models import CameraRow, EventRow
 from app.schemas.event import AIEventCreate, Event
 from app.services.camera_store import camera_row
@@ -58,7 +58,7 @@ def _aware(value: datetime) -> datetime:
 class SqlEventStore:
     """PostgreSQL event storage in the shared database's events table."""
 
-    def __init__(self, session_factory: sessionmaker) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
     def add(self, data: AIEventCreate) -> Event:

@@ -7,8 +7,9 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from app.db import SessionFactory
 from app.models import VideoAnalysisAlertRow, VideoAnalysisRow
 from app.schemas.video_analysis import (
     VideoAnalysis,
@@ -84,7 +85,7 @@ def _to_analysis(row: VideoAnalysisRow, alerts: AlertRows) -> VideoAnalysis:
 
 
 class SqlVideoAnalysisStore:
-    def __init__(self, session_factory: sessionmaker) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
     def add(self, data: VideoAnalysisCreate, created_at: datetime) -> VideoAnalysis:

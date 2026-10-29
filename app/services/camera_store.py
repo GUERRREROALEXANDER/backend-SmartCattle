@@ -5,8 +5,9 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from app.db import SessionFactory
 from app.models import CameraRow
 from app.schemas.camera import CameraRecord, CameraStatusReport, apply_report
 
@@ -64,7 +65,7 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 class SqlCameraStore:
-    def __init__(self, session_factory: sessionmaker) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
     def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
