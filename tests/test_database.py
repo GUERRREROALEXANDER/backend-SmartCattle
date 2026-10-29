@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -92,6 +93,45 @@ def test_rows_from_other_services_are_kept_and_not_listed(tmp_path, event_payloa
     with create_db_engine(url).connect() as connection:
         assert connection.execute(text("SELECT name FROM cameras ORDER BY id")).scalars().all() == [
             "Main camera", "camera-01"]
+
+
+def foreign_event(connection, camera: str, **columns) -> None:
+    """Insert an event the way another service would: no API id unless asked, nullable columns empty."""
+    connection.execute(text("INSERT INTO cameras (name) VALUES (:name)"), {"name": camera})
+    camera_id = connection.execute(text("SELECT id FROM cameras WHERE name = :name"), {"name": camera}).scalar_one()
+    values = {
+        "type": "cattle_out_of_zone", "camera_id": camera_id, "detected_object": "cow",
+        "confidence": 0.9, "detected_at": "2026-10-27 12:00:00+00:00",
+        "received_at": "2026-10-27 12:00:01+00:00", "ai_event_id": str(uuid4()),
+    } | columns
+    connection.execute(text(
+        "INSERT INTO events (type, camera_id, detected_object, confidence, detected_at, received_at, ai_event_id)"
+        " VALUES (:type, :camera_id, :detected_object, :confidence, :detected_at, :received_at, :ai_event_id)"
+    ), values)
+
+
+@pytest.mark.parametrize("camera,columns", [
+    # The shared events table is written by other services, and these columns are
+    # all nullable there. The Event schema requires every one of them.
+    ("camera-n1", {"detected_object": None}),
+    ("camera-n2", {"confidence": None}),
+    # A type this backend does not model, e.g. an event kind added by the AI service.
+    ("camera-n3", {"type": "person_detected"}),
+])
+def test_unrepresentable_rows_do_not_break_the_feed(tmp_path, event_payload, camera, columns):
+    url = f"sqlite:///{(tmp_path / 'foreign.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    with create_db_engine(url).begin() as connection:
+        foreign_event(connection, camera, **columns)
+    settings = database_settings(url)
+    with TestClient(create_app(settings)) as client:
+        # The row is skipped, not listed half-empty, and above all it does not
+        # take the whole response down with it.
+        assert client.get("/api/events").json() == {"items": [], "total": 0}
+        assert client.get("/api/metrics/summary").status_code == 200
+        # An event this API did ingest is still listed alongside the foreign row.
+        created = client.post("/api/ai/events", json=event_payload).json()
+        assert client.get("/api/events").json() == {"items": [created], "total": 1}
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not set")

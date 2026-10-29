@@ -63,6 +63,9 @@ def _listable_events() -> Select[EventRow, str]:
         .where(
             EventRow.ai_event_id.is_not(None),
             EventRow.received_at.is_not(None),
+            EventRow.detected_object.is_not(None),
+            EventRow.confidence.is_not(None),
+            EventRow.event_type.in_([kind.value for kind in EventType]),
         )
     )
 
