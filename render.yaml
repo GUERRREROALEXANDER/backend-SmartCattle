@@ -20,6 +20,16 @@ services:
         sync: false
       - key: AI_API_KEY
         generateValue: true
+      # Signs the access tokens. generateValue so the deployment never runs with
+      # authentication off and never gets a secret somebody typed from memory.
+      #
+      # Render generates this once and keeps it across deploys. Replacing it by
+      # hand signs every user out, because tokens are verified against it and
+      # there is no session table to consult.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_MINUTES
+        value: "60"
       - key: ALLOWED_ORIGINS
         value: https://smartcattle-frontend.onrender.com,http://localhost:5173
       # The AI service runs on the farm PC; this only tells the frontend that vision is set up.
