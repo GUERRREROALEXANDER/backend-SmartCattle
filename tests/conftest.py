@@ -139,3 +139,19 @@ def analysis_client(auth_client, owner_headers):
     """
     auth_client.headers.update(owner_headers)
     return auth_client
+
+
+@pytest.fixture
+def secured_auth_client(settings):
+    """Both guards on: the AI shared key and user authentication.
+
+    The endpoints the AI service calls and the ones the browser calls are
+    protected by different mechanisms, and some tests need to cross that line.
+    """
+    configured = Settings(
+        _env_file=None, allowed_origins=settings.allowed_origins,
+        smartcattle_ai_url=None, ai_api_key="test-shared-key", database_url=None,
+        jwt_secret=TEST_JWT_SECRET,
+    )
+    with TestClient(create_app(configured)) as client:
+        yield client
