@@ -9,3 +9,5 @@ psycopg[binary]>=3.2,<4.0
 bcrypt>=4.2,<6.0
 # Access tokens.
 pyjwt>=2.10,<3.0
+# Required by pydantic's EmailStr; pydantic does not pull it in itself.
+email-validator>=2.2,<3.0
