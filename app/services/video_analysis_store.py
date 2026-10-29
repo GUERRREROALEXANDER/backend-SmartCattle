@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionFactory
 from app.models import VideoAnalysisAlertRow, VideoAnalysisRow
 from app.schemas.video_analysis import (
+    VideoAlertClass,
     VideoAnalysis,
     VideoAnalysisAlert,
     VideoAnalysisAlertCreate,
@@ -78,7 +79,8 @@ def _to_analysis(row: VideoAnalysisRow, alerts: AlertRows) -> VideoAnalysis:
         avg_confidence=row.avg_confidence, outside_ratio=row.outside_ratio,
         alert_count=row.alert_count, created_at=_aware(row.created_at),
         alerts=[
-            VideoAnalysisAlert(id=alert.id, track_id=alert.track_id, cls=alert.cls, time_sec=alert.time_sec)
+            VideoAnalysisAlert(id=alert.id, track_id=alert.track_id,
+                               cls=VideoAlertClass(alert.cls), time_sec=alert.time_sec)
             for alert in alerts
         ],
     )
