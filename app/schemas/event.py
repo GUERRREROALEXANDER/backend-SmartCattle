@@ -13,7 +13,10 @@ class EventBase(BaseModel):
     event_type: EventType = Field(description="Type of detected event", examples=["cattle_out_of_zone"])
     camera_id: str = Field(min_length=1, max_length=64, description="Source camera identifier", examples=["camera-01"])
     detected_object: str = Field(min_length=1, max_length=64, description="Detected object class", examples=["cow"])
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False, description="Detection confidence from zero to one", examples=[0.95])
+    confidence: float = Field(
+        ge=0, le=1, allow_inf_nan=False,
+        description="Detection confidence from zero to one", examples=[0.95],
+    )
     timestamp: AwareDatetime = Field(description="Detection time with a timezone", examples=["2026-10-03T15:30:00Z"])
     bbox: list[Annotated[float, Field(ge=0, allow_inf_nan=False)]] | None = Field(
         default=None, min_length=4, max_length=4,

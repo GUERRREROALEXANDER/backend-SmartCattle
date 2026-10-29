@@ -10,6 +10,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.models import CameraRow
 from app.schemas.camera import CameraRecord, CameraStatusReport, apply_report
 
+# Copied verbatim from the record onto the row; reported_status needs .value.
+REPORTED_FIELDS = (
+    "last_report_at", "last_online_at", "last_error",
+    "frame_width", "frame_height", "fps", "stream_url",
+)
+
 
 class CameraStore(Protocol):
     def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord: ...
@@ -68,7 +74,7 @@ class SqlCameraStore:
             previous = _to_record(row) if row.last_report_at is not None else None
             record = apply_report(previous, camera_id, report, now)
             row.reported_status = record.reported_status.value
-            for field in ("last_report_at", "last_online_at", "last_error", "frame_width", "frame_height", "fps", "stream_url"):
+            for field in REPORTED_FIELDS:
                 setattr(row, field, getattr(record, field))
             return record
 
