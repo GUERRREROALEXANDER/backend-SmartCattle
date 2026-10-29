@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
 
@@ -24,7 +24,7 @@ class InMemoryCameraStore:
 
     def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
         with self._lock:
-            record = apply_report(self._cameras.get(camera_id), camera_id, report, datetime.now(timezone.utc))
+            record = apply_report(self._cameras.get(camera_id), camera_id, report, datetime.now(UTC))
             self._cameras[camera_id] = record
             return record
 
@@ -54,7 +54,7 @@ def _aware(value: datetime | None) -> datetime | None:
     # SQLite drops the timezone; PostgreSQL returns timestamptz in the session time zone.
     if value is None:
         return None
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class SqlCameraStore:
@@ -62,7 +62,7 @@ class SqlCameraStore:
         self._sessions = session_factory
 
     def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._sessions.begin() as session:
             row = camera_row(session, camera_id, lock=True)
             previous = _to_record(row) if row.last_report_at is not None else None

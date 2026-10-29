@@ -1,6 +1,6 @@
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -29,7 +29,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
     )
     app.state.settings = settings
-    app.state.clock = lambda: datetime.now(timezone.utc)
+    app.state.clock = lambda: datetime.now(UTC)
     if settings.sqlalchemy_url is None:
         app.state.event_store = InMemoryEventStore()
         app.state.camera_store = InMemoryCameraStore()

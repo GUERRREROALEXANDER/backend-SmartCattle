@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 METRICS_URL = "/api/metrics/summary"
-NOW = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 
 
 def test_metrics_start_empty(client):

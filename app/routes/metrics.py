@@ -1,6 +1,6 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import AwareDatetime
 
 from app.routes.events import get_event_store
@@ -20,10 +20,10 @@ def metrics_summary(
     analysis_store: VideoAnalysisStore = Depends(get_video_analysis_store),
     clock=Depends(get_clock),
 ) -> MetricsSummary:
-    now = clock().astimezone(timezone.utc)
+    now = clock().astimezone(UTC)
     hour_start = now - timedelta(hours=1)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    since_utc = since.astimezone(timezone.utc) if since is not None else None
+    since_utc = since.astimezone(UTC) if since is not None else None
     earliest = min(hour_start, today_start, since_utc) if since_utc is not None else min(hour_start, today_start)
     events = event_store.list_since(earliest)
 

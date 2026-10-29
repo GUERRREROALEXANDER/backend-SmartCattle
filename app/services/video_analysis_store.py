@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -61,7 +61,7 @@ class InMemoryVideoAnalysisStore:
 
 def _aware(value: datetime) -> datetime:
     # SQLite drops the timezone; PostgreSQL returns timestamptz in the session time zone.
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _to_analysis(row: VideoAnalysisRow, alerts: list[VideoAnalysisAlertRow]) -> VideoAnalysis:

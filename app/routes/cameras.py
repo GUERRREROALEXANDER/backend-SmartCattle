@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -44,4 +44,4 @@ def report_camera_status(
     store: CameraStore = Depends(get_camera_store),
     settings: Settings = Depends(get_app_settings),
 ) -> Camera:
-    return _camera(store.report(camera_id, report), datetime.now(timezone.utc), settings)
+    return _camera(store.report(camera_id, report), datetime.now(UTC), settings)

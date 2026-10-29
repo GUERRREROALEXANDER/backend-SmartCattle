@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -41,7 +41,7 @@ def test_report_error_keeps_last_online_time(client, online_report):
 
 def test_stale_report_is_offline(client, online_report):
     client.put(STATUS_URL, json=online_report)
-    client.app.state.clock = lambda: datetime.now(timezone.utc) + timedelta(seconds=61)
+    client.app.state.clock = lambda: datetime.now(UTC) + timedelta(seconds=61)
     camera = client.get("/api/cameras").json()["items"][0]
     assert camera["status"] == "offline"
     assert camera["reported_status"] == "online"
@@ -98,7 +98,7 @@ def test_report_requires_api_key(secured_client, online_report, key, expected):
     (61, CameraStatus.ERROR, CameraStatus.OFFLINE),
 ])
 def test_effective_status(age, reported, expected):
-    now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 6, 12, tzinfo=UTC)
     record = CameraRecord(id="c", reported_status=reported, last_report_at=now - timedelta(seconds=age))
     assert effective_status(record, now, 60) is expected
 

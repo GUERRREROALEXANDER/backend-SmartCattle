@@ -1,5 +1,5 @@
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
 from uuid import uuid4
@@ -31,7 +31,7 @@ class InMemoryEventStore:
 
     def add(self, data: AIEventCreate) -> Event:
         with self._lock:
-            event = Event(**data.model_dump(), id=uuid4(), received_at=datetime.now(timezone.utc))
+            event = Event(**data.model_dump(), id=uuid4(), received_at=datetime.now(UTC))
             self._events.append(event)
             return event
 
@@ -46,7 +46,7 @@ class InMemoryEventStore:
 
 def _aware(value: datetime) -> datetime:
     # SQLite drops the timezone; PostgreSQL returns timestamptz in the session time zone.
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class SqlEventStore:
@@ -56,7 +56,7 @@ class SqlEventStore:
         self._sessions = session_factory
 
     def add(self, data: AIEventCreate) -> Event:
-        event = Event(**data.model_dump(), id=uuid4(), received_at=datetime.now(timezone.utc))
+        event = Event(**data.model_dump(), id=uuid4(), received_at=datetime.now(UTC))
         with self._sessions.begin() as session:
             # events.camera_id references cameras.id, so a camera seen for the first time gets a row.
             camera = camera_row(session, event.camera_id)
