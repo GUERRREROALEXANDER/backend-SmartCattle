@@ -1,11 +1,14 @@
 import logging
 import math
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import Engine
 
 from app import __version__
 from app.core.config import Settings, get_settings
@@ -18,11 +21,22 @@ from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVid
 logger = logging.getLogger(__name__)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    yield
+    # Render replaces an instance by starting the new one and stopping this
+    # one; without the dispose its pooled PostgreSQL connections stay open on
+    # the server until they time out, and the free Neon plan counts them.
+    engine: Engine | None = getattr(app.state, "engine", None)
+    if engine is not None:
+        engine.dispose()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
     app = FastAPI(
-        title="SmartCattle Backend", version=__version__,
+        title="SmartCattle Backend", version=__version__, lifespan=_lifespan,
         description=(
             "REST API for AI cattle events, camera status, simulated video analyses and summary metrics. "
             "Data is stored in PostgreSQL when DATABASE_URL is set, in memory otherwise."
@@ -30,13 +44,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.clock = lambda: datetime.now(UTC)
+    app.state.engine = None
     if settings.sqlalchemy_url is None:
         app.state.event_store = InMemoryEventStore()
         app.state.camera_store = InMemoryCameraStore()
         app.state.video_analysis_store = InMemoryVideoAnalysisStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
-        sessions = create_session_factory(create_db_engine(settings.sqlalchemy_url))
+        app.state.engine = create_db_engine(settings.sqlalchemy_url)
+        sessions = create_session_factory(app.state.engine)
         app.state.event_store = SqlEventStore(sessions)
         app.state.camera_store = SqlCameraStore(sessions)
         app.state.video_analysis_store = SqlVideoAnalysisStore(sessions)

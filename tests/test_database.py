@@ -184,3 +184,22 @@ def test_database_url_is_secret():
     assert "very-secret" not in repr(settings)
     assert database_settings("").sqlalchemy_url is None
     assert database_settings("").storage_name == "memory"
+
+
+def test_engine_is_disposed_on_shutdown(tmp_path):
+    url = f"sqlite:///{(tmp_path / 'dispose.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    app = create_app(database_settings(url))
+    with TestClient(app) as client:
+        assert client.get("/api/events").status_code == 200
+        pool = app.state.engine.pool
+    # Leaving the client runs shutdown; the pool is replaced, closing the
+    # connections this instance had open on the server.
+    assert app.state.engine.pool is not pool
+
+
+def test_memory_mode_has_no_engine_to_dispose():
+    app = create_app(database_settings(""))
+    with TestClient(app) as client:
+        assert client.get("/api/status").json()["storage"] == "memory"
+    assert app.state.engine is None
