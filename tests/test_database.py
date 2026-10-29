@@ -53,7 +53,11 @@ def database_settings(url: str) -> Settings:
 
 
 def sign_in(client: TestClient, email: str = "ana@finca.example") -> None:
-    """Registers an account on this client and keeps its token for later calls."""
+    """Registers an account on this client and keeps its token for later calls.
+
+    A different email registers a second account, which is a worker. Pass the
+    default when the test needs owner rights.
+    """
     token = client.post("/api/auth/register", json={
         "email": email, "password": "una-clave-larga", "full_name": "Ana Restrepo",
     }).json()["access_token"]
