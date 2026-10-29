@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from threading import Lock
@@ -18,6 +19,11 @@ from app.schemas.video_analysis import (
     VideoAnalysisAlertCreate,
     VideoAnalysisCreate,
 )
+
+#: How many analyses the in-memory store keeps. The SQL store has no such
+#: limit: PostgreSQL holds the history and GET /api/videos/analyses pages it.
+MAX_STORED_ANALYSES = 100
+
 
 # Module-level aliases: inside these classes `list` is the method name, so a
 # bare `list[...]` annotation would read as a subscript of that method.
@@ -38,10 +44,16 @@ def _stored_alert(alert: VideoAnalysisAlertCreate, alert_id: int) -> VideoAnalys
 
 
 class InMemoryVideoAnalysisStore:
-    """Thread-safe analysis storage used when DATABASE_URL is not set."""
+    """Thread-safe analysis storage used when DATABASE_URL is not set.
 
-    def __init__(self) -> None:
-        self._analyses: list[VideoAnalysis] = []
+    Bounded like InMemoryEventStore: without DATABASE_URL every upload stays
+    in the process, and each analysis carries up to 500 alerts. On Render's
+    free instance an unbounded list is a slow leak that ends in the OOM
+    killer, so the oldest analyses are dropped instead.
+    """
+
+    def __init__(self, max_analyses: int = MAX_STORED_ANALYSES) -> None:
+        self._analyses: deque[VideoAnalysis] = deque(maxlen=max_analyses)
         self._next_alert_id = 1
         self._lock = Lock()
 
@@ -60,7 +72,7 @@ class InMemoryVideoAnalysisStore:
 
     def list(self, limit: int) -> Analyses:
         with self._lock:
-            return list(reversed(self._analyses[-limit:]))
+            return list(reversed(self._analyses))[:limit]
 
     def get(self, analysis_id: UUID) -> VideoAnalysis | None:
         with self._lock:

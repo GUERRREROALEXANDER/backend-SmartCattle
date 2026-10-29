@@ -1,8 +1,10 @@
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+
+from app.schemas.video_analysis import VideoAnalysisCreate
 
 ANALYSES_URL = "/api/videos/analyses"
 
@@ -100,3 +102,22 @@ def test_video_name_is_trimmed_and_500_alerts_are_allowed(client, video_analysis
     assert response.json()["video_name"] == "pasture-test.mp4"
     assert response.json()["alert_count"] == 500
     assert client.get("/api/events").json()["total"] == 0
+
+
+def test_in_memory_store_is_bounded(video_analysis_payload):
+    from app.services.video_analysis_store import MAX_STORED_ANALYSES, InMemoryVideoAnalysisStore
+
+    store = InMemoryVideoAnalysisStore(max_analyses=3)
+    created_at = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    kept = [
+        store.add(VideoAnalysisCreate(**(video_analysis_payload | {"video_name": f"clip-{index}.mp4"})),
+                  created_at + timedelta(seconds=index))
+        for index in range(5)
+    ]
+    listed = store.list(10)
+    # The three newest survive, newest first; the two oldest are dropped.
+    assert [analysis.video_name for analysis in listed] == ["clip-4.mp4", "clip-3.mp4", "clip-2.mp4"]
+    # Dropped analyses are no longer retrievable, and alert ids were never reused.
+    assert store.get(kept[0].id) is None
+    assert len({alert.id for analysis in listed for alert in analysis.alerts}) == 6
+    assert MAX_STORED_ANALYSES >= 1
