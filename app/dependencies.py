@@ -21,6 +21,7 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from app.core.config import Settings
 from app.core.security import decode_access_token
 from app.schemas.auth import UserRole
+from app.services.animal_store import AnimalStore
 from app.services.camera_store import CameraStore
 from app.services.event_store import EventStore
 from app.services.login_throttle import LoginThrottle
@@ -51,6 +52,11 @@ def get_clock(request: Request) -> Clock:
 
 def get_event_store(request: Request) -> EventStore:
     store: EventStore = request.app.state.event_store
+    return store
+
+
+def get_animal_store(request: Request) -> AnimalStore:
+    store: AnimalStore = request.app.state.animal_store
     return store
 
 
