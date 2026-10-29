@@ -70,3 +70,24 @@ def test_dotenv_and_environment_precedence(monkeypatch, tmp_path):
 
 def test_settings_are_cached():
     assert get_settings() is get_settings()
+
+
+def test_env_example_documents_every_setting():
+    """.env.example and Settings must describe the same variables.
+
+    Both directions are mistakes. A documented variable the application does
+    not read is worse than an undocumented one -- somebody sets it, nothing
+    happens, and there is nothing to notice. A setting with no entry is one
+    nobody knows exists until they read the source.
+    """
+    import re
+    from pathlib import Path
+
+    from app.core.config import Settings
+
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    documented = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", example.read_text(encoding="utf-8"), re.M))
+    declared = {name.upper() for name in Settings.model_fields}
+
+    assert documented - declared == set(), "documented but not read by Settings"
+    assert declared - documented == set(), "declared in Settings but not documented"
