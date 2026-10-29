@@ -4,7 +4,7 @@ from threading import Lock
 from typing import Protocol
 from uuid import uuid4
 
-from sqlalchemy import Select, select
+from sqlalchemy import ColumnElement, Select, func, select
 
 from app.db import SessionFactory
 from app.models import CameraRow, EventRow
@@ -26,6 +26,8 @@ class EventStore(Protocol):
     def list(self) -> Events: ...
 
     def list_since(self, start: datetime) -> Events: ...
+
+    def count_between(self, start: datetime, end: datetime) -> int: ...
 
 
 class InMemoryEventStore:
@@ -49,6 +51,11 @@ class InMemoryEventStore:
         with self._lock:
             return [event for event in self._events if event.timestamp >= start]
 
+    def count_between(self, start: datetime, end: datetime) -> int:
+        with self._lock:
+            # Counted without building a list: the caller only wants the number.
+            return sum(1 for event in self._events if start <= event.timestamp <= end)
+
 
 def _listable_events() -> Select[EventRow, str]:
     """Events this API can represent, joined to the camera name it reports as camera_id.
@@ -59,15 +66,25 @@ def _listable_events() -> Select[EventRow, str]:
     keeps one foreign row from failing the whole response.
     """
     return (
-        select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)
-        .where(
-            EventRow.ai_event_id.is_not(None),
-            EventRow.received_at.is_not(None),
-            EventRow.detected_object.is_not(None),
-            EventRow.confidence.is_not(None),
-            EventRow.event_type.in_([kind.value for kind in EventType]),
-        )
+        select(EventRow, CameraRow.name)
+        .join(CameraRow, EventRow.camera_id == CameraRow.id)
+        .where(*_listable_conditions())
     )
+
+
+def _listable_conditions() -> list[ColumnElement[bool]]:
+    """The columns the Event schema requires, as reusable WHERE conditions.
+
+    Shared by the listing queries and by count_between, so the feed and the
+    metrics cannot disagree about which rows exist.
+    """
+    return [
+        EventRow.ai_event_id.is_not(None),
+        EventRow.received_at.is_not(None),
+        EventRow.detected_object.is_not(None),
+        EventRow.confidence.is_not(None),
+        EventRow.event_type.in_([kind.value for kind in EventType]),
+    ]
 
 
 def _to_event(row: EventRow, camera: str) -> Event:
@@ -116,6 +133,25 @@ class SqlEventStore:
         # Metrics use detection time, and unlike the event feed this query has no 1000-row limit in SQL.
         query = _listable_events().where(EventRow.timestamp >= start).order_by(EventRow.timestamp, EventRow.id)
         return self._fetch(query)
+
+    def count_between(self, start: datetime, end: datetime) -> int:
+        """COUNT(*) over the window, so the database returns one row.
+
+        Shares _listable_conditions() with the listing queries, so a row the
+        feed will not show is not counted either. Those two disagreeing is how
+        a dashboard ends up reporting more alerts than it can display.
+        """
+        query = (
+            select(func.count())
+            .select_from(EventRow)
+            .where(
+                *_listable_conditions(),
+                EventRow.timestamp >= start,
+                EventRow.timestamp <= end,
+            )
+        )
+        with self._sessions() as session:
+            return int(session.scalar(query) or 0)
 
     def _fetch(self, query: Select[EventRow, str]) -> Events:
         with self._sessions() as session:
