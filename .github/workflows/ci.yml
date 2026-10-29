@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch cancels the run already in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          # Matches PYTHON_VERSION in render.yaml.
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy
+
+      - name: Test
+        run: pytest -q
+
+      - name: Migrations apply to an empty database and roll back
+        # Catches a revision that only works on a database already in the
+        # right shape, which is the failure mode of a Render deploy.
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+        env:
+          DATABASE_URL: sqlite:///ci-migrations.db

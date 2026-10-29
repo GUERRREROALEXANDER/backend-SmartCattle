@@ -12,3 +12,6 @@ htmlcov/
 .python/
 .uv-cache/
 .pytest-tmp/
+
+# CI artefacts
+ci-migrations.db
