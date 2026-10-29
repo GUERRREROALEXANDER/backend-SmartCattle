@@ -120,3 +120,45 @@ def test_non_finite_bbox(client):
             '"confidence":0.9,"timestamp":"2026-10-03T15:30:00Z","bbox":[1,2,NaN,4]}')
     response = client.post("/api/ai/events", content=body, headers={"Content-Type": "application/json"})
     assert response.status_code == 422
+
+
+def test_one_camera_can_be_fetched_on_its_own(client, online_report):
+    client.put("/api/ai/cameras/camera-01/status", json=online_report)
+    response = client.get("/api/cameras/camera-01")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "camera-01"
+    assert body["status"] == "online"
+
+
+def test_an_unreported_camera_is_a_404(client):
+    response = client.get("/api/cameras/camera-99")
+    assert response.status_code == 404
+    assert "camera-99" in response.json()["detail"]
+
+
+def test_the_detail_view_expires_a_stale_report(client, online_report):
+    from datetime import timedelta
+
+    client.put("/api/ai/cameras/camera-01/status", json=online_report)
+    moved = client.app.state.clock() + timedelta(seconds=61)
+    client.app.state.clock = lambda: moved
+
+    body = client.get("/api/cameras/camera-01").json()
+    # The same rule as the list view: the backend cannot claim a camera is
+    # online unless the AI service keeps confirming it.
+    assert body["status"] == "offline"
+    assert body["reported_status"] == "online"
+
+
+@pytest.mark.parametrize("camera_id", ["with space", "a" * 65, "camera.01"])
+def test_an_unusable_camera_id_is_rejected(client, camera_id):
+    assert client.get(f"/api/cameras/{camera_id}").status_code == 422
+
+
+def test_a_camera_id_with_a_slash_cannot_reach_the_route(client):
+    # Not a 422: the slash splits the path, so the request is for
+    # /api/cameras/camera/01, which matches no route at all. Worth pinning,
+    # because it is the reason the pattern excludes the character rather than
+    # merely rejecting it.
+    assert client.get("/api/cameras/camera/01").status_code == 404
