@@ -166,7 +166,8 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | --- | --- | --- |
 | GET | `/` | Service name, version, and docs path |
 | GET | `/health` | `{"status":"ok"}` deployment health check |
-| GET | `/api/status` | Version, AI configuration flag, and storage type (`memory` or `postgresql`) |
+| GET | `/api/status` | Version, AI configuration flag, storage type (`memory` or `postgresql`), and whether authentication is configured |
+| GET | `/api/cameras/{camera_id}` | One camera's effective status, or a JSON 404 if it has never reported |
 | POST | `/api/auth/register` | Creates an account and returns a bearer token; the first account is the owner |
 | POST | `/api/auth/login` | Returns a bearer token for an existing account |
 | GET | `/api/auth/me` | The signed-in account |
@@ -251,7 +252,7 @@ Set `BACKEND_BASE_URL` in the frontend to `http://localhost:8000` for local deve
 | --- | --- |
 | `/` | `{"name":"SmartCattle Backend","version":"<version>","docs":"/docs"}` |
 | `/health` | `{"status":"ok"}` |
-| `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory"}` (`configured` may be `true`) |
+| `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory","auth_enabled":false}` (`configured` and `auth_enabled` may be `true`) |
 | `/api/animals` | `{"items":[{"tag":"A-441","name":"Lucera","status":"active","camera_id":"camera-01","last_detection":null,"created_at":"<UTC>","updated_at":"<UTC>"}],"total":1}` (empty: `{"items":[],"total":0}`) |
 | `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z","level":"high"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
 | `/api/cameras` | `{"items":[{"id":"camera-01","reported_status":"online","status":"online","last_report_at":"<UTC>","last_online_at":"<UTC>","last_error":null,"frame_width":1280,"frame_height":720,"fps":14.8}],"total":1}` (no camera yet: `{"items":[],"total":0}`) |
