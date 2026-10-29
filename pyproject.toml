@@ -19,3 +19,44 @@ filterwarnings = [
     # favour of httpx2. Switching test clients is not part of this change.
     "default:Using `httpx` with `starlette.testclient` is deprecated:",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = [".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import sorting
+    "UP",       # pyupgrade: keep the syntax current with the Python floor
+    "B",        # bugbear: likely bugs rather than style
+    "C4",       # comprehensions
+    "SIM",      # simplifiable code
+    "RET",      # unnecessary branches around returns
+    "ARG",      # unused arguments, which usually mean a stale signature
+    "DTZ",      # naive datetimes: every timestamp in SmartCattle is UTC-aware
+    "ASYNC",    # blocking calls inside async functions
+    "S",        # bandit security checks
+    "PTH",      # pathlib over os.path
+    "RUF",
+]
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares dependencies, query and path metadata as argument defaults.
+# Without this list every route signature trips B008 (function call in default).
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Security",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Header",
+    "fastapi.Body",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, use fixed demo secrets and hard-code URLs on purpose.
+"tests/*" = ["S101", "S105", "S106", "ARG001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "data_structures"]
