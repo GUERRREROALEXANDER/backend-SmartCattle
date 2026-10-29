@@ -150,17 +150,36 @@ Per-frame detections are not stored: the AI only sends relevant events. See [ARC
 
 ## Endpoints
 
+Endpoints marked **owner** need an account with that role; the ones marked
+signed in need any account. The `X-API-Key` ones are called by the AI service.
+See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
+[docs/ROLES.md](docs/ROLES.md).
+
 | Method | Path | Response |
 | --- | --- | --- |
 | GET | `/` | Service name, version, and docs path |
 | GET | `/health` | `{"status":"ok"}` deployment health check |
 | GET | `/api/status` | Version, AI configuration flag, and storage type (`memory` or `postgresql`) |
-| GET | `/api/animals` | Empty animal collection with total zero |
-| GET | `/api/events` | Stored events, most recently received first (at most 1000), and total |
+| POST | `/api/auth/register` | Creates an account and returns a bearer token; the first account is the owner |
+| POST | `/api/auth/login` | Returns a bearer token for an existing account |
+| GET | `/api/auth/me` | The signed-in account |
+| GET | `/api/animals` | The herd, optionally filtered with `?status=active\|inactive\|lost` |
+| GET | `/api/animals/{tag}` | One animal, or a JSON 404 |
+| POST | `/api/animals` | Registers an animal (**owner**); 409 if the ear tag is taken |
+| PATCH | `/api/animals/{tag}` | Partial update (**owner**); omitted fields keep their values |
+| POST | `/api/animals/{tag}/deactivate` | Withdraws an animal from the active herd (**owner**). There is no DELETE |
+| PUT | `/api/animals/{tag}/detection` | AI service records a sighting (`X-API-Key`) |
+| GET | `/api/animals/{tag}/exists` | Whether a tag is taken, for the registration form (signed in) |
+| GET | `/api/zones` | Configured safe zones, optionally `?camera_id=` (signed in) |
+| GET | `/api/zones/{id}` | One zone, or a JSON 404 (signed in) |
+| POST | `/api/zones/camera/{camera_id}` | Configures a safe zone (**owner**) |
+| PATCH | `/api/zones/{id}` | Partial update (**owner**); the geometry is replaced as a whole |
+| DELETE | `/api/zones/{id}` | Removes a zone (**owner**) |
+| GET | `/api/events` | Stored events with their severity, most recently received first (at most 1000), and total |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
 | PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
-| POST | `/api/videos/analyses` | Stores a simulated video analysis; returns 201 with the analysis and alerts |
+| POST | `/api/videos/analyses` | Stores a simulated video analysis (**signed in**); returns 201 with the analysis and alerts |
 | GET | `/api/videos/analyses?limit=20` | Latest analyses first; `limit` defaults to 20 and accepts 1–100 |
 | GET | `/api/videos/analyses/{id}` | One analysis with its alerts, or a JSON 404 |
 | GET | `/api/metrics/summary?since=<ISO>` | Event rates and latest-analysis animal estimates; `since` is optional and timezone-aware |
