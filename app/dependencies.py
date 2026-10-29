@@ -27,6 +27,7 @@ from app.services.event_store import EventStore
 from app.services.login_throttle import LoginThrottle
 from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
+from app.services.zone_store import ZoneStore
 
 #: Returns the current time, always timezone-aware and in UTC. Injected so
 #: tests can move it without patching datetime.now globally.
@@ -67,6 +68,11 @@ def get_camera_store(request: Request) -> CameraStore:
 
 def get_video_analysis_store(request: Request) -> VideoAnalysisStore:
     store: VideoAnalysisStore = request.app.state.video_analysis_store
+    return store
+
+
+def get_zone_store(request: Request) -> ZoneStore:
+    store: ZoneStore = request.app.state.zone_store
     return store
 
 
