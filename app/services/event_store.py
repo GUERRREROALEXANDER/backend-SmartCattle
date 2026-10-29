@@ -1,4 +1,5 @@
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
@@ -26,6 +27,42 @@ MAX_LISTED_EVENTS = 1000
 Events = list[Event]
 
 
+@dataclass(frozen=True)
+class EventQuery:
+    """What the feed is asking for.
+
+    One object rather than five parameters threaded through the protocol and
+    both implementations: adding a filter then touches the query and the two
+    stores, not every signature in between.
+    """
+
+    camera_id: str | None = None
+    level: EventLevel | None = None
+    event_type: EventType | None = None
+    limit: int = MAX_LISTED_EVENTS
+    offset: int = 0
+
+    def matches(self, event: Event) -> bool:
+        """Whether an event satisfies the filters. Used by the in-memory store."""
+        if self.camera_id is not None and event.camera_id != self.camera_id:
+            return False
+        if self.level is not None and event.level is not self.level:
+            return False
+        return not (self.event_type is not None and event.event_type is not self.event_type)
+
+
+@dataclass(frozen=True)
+class EventPage:
+    """A page, plus how many events matched.
+
+    total is the match count and not len(items), so a client can tell whether
+    there is another page.
+    """
+
+    items: Events
+    total: int
+
+
 class EventStore(Protocol):
     def add(self, data: AIEventCreate, received_at: datetime) -> Event: ...
 
@@ -34,6 +71,8 @@ class EventStore(Protocol):
     def list_since(self, start: datetime) -> Events: ...
 
     def count_between(self, start: datetime, end: datetime) -> int: ...
+
+    def page(self, query: EventQuery) -> EventPage: ...
 
 
 class InMemoryEventStore:
@@ -64,6 +103,16 @@ class InMemoryEventStore:
         with self._lock:
             # Counted without building a list: the caller only wants the number.
             return sum(1 for event in self._events if start <= event.timestamp <= end)
+
+    def page(self, query: EventQuery) -> EventPage:
+        with self._lock:
+            matching = [event for event in reversed(self._events) if query.matches(event)]
+        # Sliced after counting, so total is the number that matched rather
+        # than the number returned.
+        return EventPage(
+            items=matching[query.offset:query.offset + query.limit],
+            total=len(matching),
+        )
 
 
 def _listable_events() -> Select[EventRow, str]:
@@ -189,6 +238,35 @@ class SqlEventStore:
         )
         with self._sessions() as session:
             return int(session.scalar(query) or 0)
+
+    def page(self, query: EventQuery) -> EventPage:
+        conditions = _listable_conditions()
+        if query.camera_id is not None:
+            conditions.append(CameraRow.name == query.camera_id)
+        if query.level is not None:
+            conditions.append(EventRow.level == query.level.value)
+        if query.event_type is not None:
+            conditions.append(EventRow.event_type == query.event_type.value)
+
+        rows = (
+            select(EventRow, CameraRow.name)
+            .join(CameraRow, EventRow.camera_id == CameraRow.id)
+            .where(*conditions)
+            .order_by(EventRow.received_at.desc(), EventRow.id.desc())
+            .limit(query.limit)
+            .offset(query.offset)
+        )
+        # Counted in SQL rather than by fetching and measuring: the point of
+        # paging is not to transfer the rows outside the page.
+        total = (
+            select(func.count())
+            .select_from(EventRow)
+            .join(CameraRow, EventRow.camera_id == CameraRow.id)
+            .where(*conditions)
+        )
+        with self._sessions() as session:
+            items = [_to_event(row, camera) for row, camera in session.execute(rows)]
+            return EventPage(items=items, total=int(session.scalar(total) or 0))
 
     def _fetch(self, query: Select[EventRow, str]) -> Events:
         with self._sessions() as session:
