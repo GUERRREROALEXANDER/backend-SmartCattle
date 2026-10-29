@@ -4,3 +4,6 @@ httpx>=0.28,<1.0
 ruff>=0.14,<1.0
 mypy>=1.14,<2.0
 pytest-cov>=6.0,<8.0
+# A ring has no natural end, so an unbounded traversal hangs instead of
+# failing. pytest-timeout turns that hang into a reported failure.
+pytest-timeout>=2.3,<3.0
