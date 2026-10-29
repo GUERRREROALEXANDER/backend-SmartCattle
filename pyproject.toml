@@ -60,3 +60,19 @@ extend-immutable-calls = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "data_structures"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["app", "data_structures"]
+# tests/ is deliberately out of scope: pytest functions take fixtures by name
+# and return nothing, so strict annotations there add noise without catching
+# defects. What ships is what gets checked.
+exclude = ['\.venv', '^migrations/versions/']
+# No SQLAlchemy mypy plugin: since 2.0 the Mapped[] annotations are plain
+# generics that mypy reads natively, and the plugin was dropped in 2.1.
+
+[[tool.mypy.overrides]]
+# Alembic's env module runs as a script, not as importable library code.
+module = "migrations.env"
+ignore_errors = true
