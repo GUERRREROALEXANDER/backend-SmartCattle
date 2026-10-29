@@ -52,3 +52,59 @@ def video_analysis_payload():
         ],
         "avg_confidence": 0.91, "outside_ratio": 0.25,
     }
+
+
+# A 32-byte secret, the minimum Settings accepts. Fixed rather than random so a
+# failure is reproducible from the test output alone.
+TEST_JWT_SECRET = "test-secret-for-the-suite-0123456789"
+
+
+@pytest.fixture
+def auth_settings(settings):
+    """Settings with authentication switched on."""
+    return Settings(
+        _env_file=None, allowed_origins=settings.allowed_origins,
+        smartcattle_ai_url=None, ai_api_key=None, database_url=None,
+        jwt_secret=TEST_JWT_SECRET,
+    )
+
+
+@pytest.fixture
+def auth_client(auth_settings):
+    with TestClient(create_app(auth_settings)) as client:
+        yield client
+
+
+@pytest.fixture
+def owner_payload():
+    return {
+        "email": "ana@finca.example",
+        "password": "una-clave-larga",
+        "full_name": "Ana Restrepo",
+    }
+
+
+@pytest.fixture
+def owner(auth_client, owner_payload):
+    """The first registered account, which is therefore the owner."""
+    return auth_client.post("/api/auth/register", json=owner_payload).json()
+
+
+@pytest.fixture
+def owner_headers(owner):
+    return {"Authorization": f"Bearer {owner['access_token']}"}
+
+
+@pytest.fixture
+def worker(auth_client, owner):
+    """A second account, which is therefore a worker."""
+    return auth_client.post("/api/auth/register", json={
+        "email": "beto@finca.example",
+        "password": "otra-clave-larga",
+        "full_name": "Beto Salazar",
+    }).json()
+
+
+@pytest.fixture
+def worker_headers(worker):
+    return {"Authorization": f"Bearer {worker['access_token']}"}
