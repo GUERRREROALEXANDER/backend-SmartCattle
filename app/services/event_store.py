@@ -4,11 +4,11 @@ from threading import Lock
 from typing import Protocol
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
 from app.db import SessionFactory
 from app.models import CameraRow, EventRow
-from app.schemas.event import AIEventCreate, Event
+from app.schemas.event import AIEventCreate, Event, EventType
 from app.services.camera_store import camera_row
 
 MAX_LISTED_EVENTS = 1000
@@ -50,6 +50,35 @@ class InMemoryEventStore:
             return [event for event in self._events if event.timestamp >= start]
 
 
+def _listable_events() -> Select[EventRow, str]:
+    """Events this API can represent, joined to the camera name it reports as camera_id.
+
+    The shared events table is written by other services too, and most of its
+    columns are nullable there. A row missing any field the Event schema
+    requires is left out rather than listed half-empty, which is also what
+    keeps one foreign row from failing the whole response.
+    """
+    return (
+        select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)
+        .where(
+            EventRow.ai_event_id.is_not(None),
+            EventRow.received_at.is_not(None),
+        )
+    )
+
+
+def _to_event(row: EventRow, camera: str) -> Event:
+    assert row.ai_event_id is not None and row.received_at is not None  # noqa: S101 - guaranteed by _listable_events
+    assert row.detected_object is not None and row.confidence is not None  # noqa: S101
+    return Event(
+        id=row.ai_event_id, event_type=EventType(row.event_type), camera_id=camera,
+        detected_object=row.detected_object,
+        # confidence is REAL (float4) in the shared schema: 0.95 reads back as 0.949999988.
+        confidence=float(f"{row.confidence:.6g}"),
+        timestamp=_aware(row.timestamp), received_at=_aware(row.received_at), bbox=row.bbox,
+    )
+
+
 def _aware(value: datetime) -> datetime:
     # SQLite drops the timezone; PostgreSQL returns timestamptz in the session time zone.
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
@@ -74,35 +103,17 @@ class SqlEventStore:
         return event
 
     def list(self) -> Events:
-        # Only events ingested through this API have the id, camera and fields the Event schema requires.
         query = (
-            select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)
-            .where(EventRow.ai_event_id.is_not(None), EventRow.received_at.is_not(None))
+            _listable_events()
             .order_by(EventRow.received_at.desc(), EventRow.id.desc()).limit(MAX_LISTED_EVENTS)
         )
-        with self._sessions() as session:
-            return [
-                # confidence is REAL (float4) in the shared schema: 0.95 reads back as 0.949999988.
-                Event(id=row.ai_event_id, event_type=row.event_type, camera_id=camera,
-                      detected_object=row.detected_object, confidence=float(f"{row.confidence:.6g}"),
-                      timestamp=_aware(row.timestamp), received_at=_aware(row.received_at), bbox=row.bbox)
-                for row, camera in session.execute(query)
-            ]
+        return self._fetch(query)
 
     def list_since(self, start: datetime) -> Events:
         # Metrics use detection time, and unlike the event feed this query has no 1000-row limit in SQL.
-        query = (
-            select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)
-            .where(
-                EventRow.ai_event_id.is_not(None), EventRow.received_at.is_not(None),
-                EventRow.timestamp >= start,
-            )
-            .order_by(EventRow.timestamp, EventRow.id)
-        )
+        query = _listable_events().where(EventRow.timestamp >= start).order_by(EventRow.timestamp, EventRow.id)
+        return self._fetch(query)
+
+    def _fetch(self, query: Select[EventRow, str]) -> Events:
         with self._sessions() as session:
-            return [
-                Event(id=row.ai_event_id, event_type=row.event_type, camera_id=camera,
-                      detected_object=row.detected_object, confidence=float(f"{row.confidence:.6g}"),
-                      timestamp=_aware(row.timestamp), received_at=_aware(row.received_at), bbox=row.bbox)
-                for row, camera in session.execute(query)
-            ]
+            return [_to_event(row, camera) for row, camera in session.execute(query)]
