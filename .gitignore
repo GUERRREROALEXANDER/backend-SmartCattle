@@ -15,3 +15,6 @@ htmlcov/
 
 # CI artefacts
 ci-migrations.db
+
+# Local smoke databases created when driving the app by hand.
+smoke*.db
