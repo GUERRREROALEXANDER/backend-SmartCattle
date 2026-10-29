@@ -81,3 +81,24 @@ exclude = ['\.venv', '^migrations/versions/']
 # Alembic's env module runs as a script, not as importable library code.
 module = "migrations.env"
 ignore_errors = true
+
+[tool.coverage.run]
+branch = true
+# The in-memory and SQL stores are separate code paths and both ship; a line
+# covered in one does not mean the other works.
+parallel = false
+
+[tool.coverage.report]
+exclude_also = [
+    # Demonstration blocks in data_structures/. They exist to be read and run
+    # by hand; counting them as uncovered makes the number say less, not more.
+    'if __name__ == .__main__.:',
+    # Protocol declarations: bodies are literally "...".
+    '^\s*\.\.\.$',
+    'class .*\(Protocol\):',
+    # Asserts that state what a query already guarantees. Reaching one means
+    # the guarantee broke, which is a bug and not a branch to test.
+    'assert .* is not None  # noqa: S101',
+    # TYPE_CHECKING imports never run.
+    'if TYPE_CHECKING:',
+]
