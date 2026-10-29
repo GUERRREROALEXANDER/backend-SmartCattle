@@ -1,0 +1,21 @@
+[project]
+name = "smartcattle-backend"
+version = "0.1.0"
+description = "REST API for SmartCattle: AI cattle events, camera status, video analyses and metrics."
+requires-python = ">=3.13"
+readme = "README.md"
+
+# Runtime and development dependencies stay in requirements.txt and
+# requirements-dev.txt: Render installs them directly with pip, and duplicating
+# them here would let the two lists drift apart.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Treat warnings as errors so a deprecation in FastAPI, SQLAlchemy or Pydantic
+# surfaces in CI instead of the day the dependency drops the feature.
+filterwarnings = [
+    "error",
+    # starlette.testclient warns at import time that httpx is deprecated in
+    # favour of httpx2. Switching test clients is not part of this change.
+    "default:Using `httpx` with `starlette.testclient` is deprecated:",
+]
