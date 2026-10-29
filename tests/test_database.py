@@ -11,6 +11,7 @@ from sqlalchemy import Engine, inspect, text
 from app.core.config import Settings
 from app.db import create_db_engine
 from app.main import create_app
+from tests.conftest import TEST_JWT_SECRET
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,7 +44,20 @@ def alembic_config(url: str) -> Config:
 
 
 def database_settings(url: str) -> Settings:
-    return Settings(_env_file=None, smartcattle_ai_url=None, ai_api_key=None, database_url=url)
+    # Authentication on: the video analysis endpoints require a signed-in user,
+    # and these tests exercise them against a real database.
+    return Settings(
+        _env_file=None, smartcattle_ai_url=None, ai_api_key=None, database_url=url,
+        jwt_secret=TEST_JWT_SECRET,
+    )
+
+
+def sign_in(client: TestClient, email: str = "ana@finca.example") -> None:
+    """Registers an account on this client and keeps its token for later calls."""
+    token = client.post("/api/auth/register", json={
+        "email": email, "password": "una-clave-larga", "full_name": "Ana Restrepo",
+    }).json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
 
 
 def exercise_app(settings: Settings, event_payload: dict) -> None:
@@ -80,6 +94,7 @@ def test_sqlite_migrations_and_persistence(tmp_path, event_payload, video_analys
     settings = database_settings(url)
     exercise_app(settings, event_payload)
     with TestClient(create_app(settings)) as client:
+        sign_in(client)
         analysis = client.post("/api/videos/analyses", json=video_analysis_payload).json()
         assert client.get("/api/events").json()["total"] == 3
     with TestClient(create_app(settings)) as client:

@@ -127,3 +127,15 @@ def cheap_password_hashing(monkeypatch):
     the real value.
     """
     monkeypatch.setattr(security, "BCRYPT_ROUNDS", 4)
+
+
+@pytest.fixture
+def analysis_client(auth_client, owner_headers):
+    """An authenticated client for the endpoints that now require a user.
+
+    The header is set on the client rather than passed per call, because what
+    changed is who may use these endpoints and not what each request looks
+    like.
+    """
+    auth_client.headers.update(owner_headers)
+    return auth_client

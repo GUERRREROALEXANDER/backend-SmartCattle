@@ -38,7 +38,7 @@ def test_metrics_without_since_omit_that_count(client, event_payload):
     assert metrics["detections_per_minute"] == pytest.approx(1 / 60)
 
 
-def test_animal_counts_come_from_latest_analysis(client, video_analysis_payload):
+def test_animal_counts_come_from_latest_analysis(auth_client, video_analysis_payload):
     first = video_analysis_payload | {
         "max_cattle": 5,
         "alerts": [
@@ -50,9 +50,19 @@ def test_animal_counts_come_from_latest_analysis(client, video_analysis_payload)
         "video_name": "latest.mp4", "max_cattle": 4,
         "alerts": [{"track_id": 8, "cls": "cattle", "time_sec": 1}],
     }
-    client.post("/api/videos/analyses", json=first)
-    client.post("/api/videos/analyses", json=second)
-    metrics = client.get(METRICS_URL).json()
+    # The clock is moved first, then the account is registered, so the token is
+    # issued at the same instant the request is judged against. Registering
+    # beforehand would date the token two days ahead of this test's clock and
+    # it would be refused as not yet valid.
+    auth_client.app.state.clock = lambda: NOW
+    token = auth_client.post("/api/auth/register", json={
+        "email": "ana@finca.example", "password": "una-clave-larga", "full_name": "Ana",
+    }).json()["access_token"]
+    auth_client.headers.update({"Authorization": f"Bearer {token}"})
+
+    auth_client.post("/api/videos/analyses", json=first)
+    auth_client.post("/api/videos/analyses", json=second)
+    metrics = auth_client.get(METRICS_URL).json()
     assert metrics["animals_inside"] == 3
     assert metrics["animals_outside"] == 1
 

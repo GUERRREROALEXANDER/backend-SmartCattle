@@ -3,7 +3,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.dependencies import Clock, get_clock, get_event_store, get_video_analysis_store
+from app.dependencies import (
+    Clock,
+    current_user,
+    get_clock,
+    get_event_store,
+    get_video_analysis_store,
+)
 from app.schemas.event import AIEventCreate, EventType
 from app.schemas.video_analysis import (
     VideoAlertClass,
@@ -18,13 +24,26 @@ router = APIRouter(prefix="/api/videos", tags=["videos"])
 VIDEO_CAMERA_ID = "video-upload"
 
 
-@router.post("/analyses", response_model=VideoAnalysis, status_code=201)
+@router.post(
+    "/analyses", response_model=VideoAnalysis, status_code=201,
+    # Declared on the route rather than as a parameter: the handler does not
+    # read the user, it only requires that there is one.
+    dependencies=[Depends(current_user)],
+)
 def create_video_analysis(
     data: VideoAnalysisCreate,
     store: VideoAnalysisStore = Depends(get_video_analysis_store),
     event_store: EventStore = Depends(get_event_store),
     clock: Clock = Depends(get_clock),
 ) -> VideoAnalysis:
+    """Stores a video analysis and logs an event for each cattle alert.
+
+    Requires a signed-in user, not the AI key. This endpoint is called by the
+    browser, and AI_API_KEY cannot live in a browser bundle -- the frontend's
+    own .env.example says so. Until this was protected, an unauthenticated
+    caller could write into the shared events feed through it, which is the one
+    path into that table that asked for nothing at all.
+    """
     created_at = clock()
     analysis = store.add(data, created_at)
     for alert in data.alerts:
