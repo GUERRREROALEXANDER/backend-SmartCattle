@@ -23,6 +23,7 @@ def test_status(client):
     assert response.json() == {
         "status": "ok", "version": __version__,
         "ai_service": {"configured": False}, "storage": "memory",
+        "auth_enabled": False,
     }
 
 
@@ -131,3 +132,22 @@ def test_the_request_id_is_logged_with_the_access_line(client, caplog):
     assert access.request_id == request_id
     assert access.status == 200
     assert access.path == "/health"
+
+
+def test_status_reports_authentication_off(client):
+    # The frontend needs this before offering a sign-in form: with
+    # authentication off, a login attempt gets a 503 that looks like a server
+    # fault rather than an unconfigured deployment.
+    assert client.get("/api/status").json()["auth_enabled"] is False
+
+
+def test_status_reports_authentication_on(auth_client):
+    assert auth_client.get("/api/status").json()["auth_enabled"] is True
+
+
+def test_status_never_leaks_the_secret(auth_client):
+    from tests.conftest import TEST_JWT_SECRET
+
+    # A boolean, not the value. This endpoint is public.
+    body = auth_client.get("/api/status").text
+    assert TEST_JWT_SECRET not in body
