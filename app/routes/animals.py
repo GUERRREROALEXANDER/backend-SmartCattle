@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.dependencies import (
     Clock,
-    CurrentUser,
-    OwnerUser,
+    current_user,
     get_animal_store,
     get_clock,
+    require_owner,
     verify_api_key,
 )
 from app.schemas.animal import (
@@ -21,6 +21,11 @@ from app.schemas.animal import (
 from app.services.animal_store import AnimalStore, TagAlreadyRegisteredError
 
 router = APIRouter(prefix="/api/animals", tags=["animals"])
+
+# Declared on the routes rather than as a parameter: these handlers do not read
+# the user, they only require one with the right role.
+OWNER_ONLY = [Depends(require_owner)]
+SIGNED_IN = [Depends(current_user)]
 
 #: The ear tag in the path. Restricted to what survives a path segment
 #: unescaped; a tag with a slash would split the route.
@@ -56,10 +61,12 @@ def get_animal(tag: TagParam, store: AnimalStore = Depends(get_animal_store)) ->
     return _found(store.get(tag), tag)
 
 
-@router.post("", response_model=Animal, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=Animal, status_code=status.HTTP_201_CREATED,
+    dependencies=OWNER_ONLY,
+)
 def create_animal(
     data: AnimalCreate,
-    owner: OwnerUser,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
 ) -> Animal:
@@ -78,11 +85,10 @@ def create_animal(
         ) from error
 
 
-@router.patch("/{tag}", response_model=Animal)
+@router.patch("/{tag}", response_model=Animal, dependencies=OWNER_ONLY)
 def update_animal(
     tag: TagParam,
     data: AnimalUpdate,
-    owner: OwnerUser,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
 ) -> Animal:
@@ -97,10 +103,9 @@ def update_animal(
     return _found(store.update(tag, data, clock()), tag)
 
 
-@router.post("/{tag}/deactivate", response_model=Animal)
+@router.post("/{tag}/deactivate", response_model=Animal, dependencies=OWNER_ONLY)
 def deactivate_animal(
     tag: TagParam,
-    owner: OwnerUser,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
 ) -> Animal:
@@ -138,10 +143,9 @@ def record_detection(
     return _found(store.record_detection(tag, data.camera_id, data.detected_at), tag)
 
 
-@router.get("/{tag}/exists", response_model=dict[str, bool])
+@router.get("/{tag}/exists", response_model=dict[str, bool], dependencies=SIGNED_IN)
 def animal_exists(
     tag: TagParam,
-    user: CurrentUser,
     store: AnimalStore = Depends(get_animal_store),
 ) -> dict[str, bool]:
     """Whether a tag is taken, for the registration form.
