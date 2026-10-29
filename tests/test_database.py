@@ -134,6 +134,23 @@ def test_unrepresentable_rows_do_not_break_the_feed(tmp_path, event_payload, cam
         assert client.get("/api/events").json() == {"items": [created], "total": 1}
 
 
+def test_camera_without_a_reported_status_is_not_listed(tmp_path, event_payload):
+    url = f"sqlite:///{(tmp_path / 'cameras.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    with create_db_engine(url).begin() as connection:
+        # A timestamp without a status: what a direct UPDATE or another writer leaves behind.
+        connection.execute(text(
+            "INSERT INTO cameras (name, last_report_at) VALUES ('camera-07', '2026-10-27 12:00:00+00:00')"
+        ))
+    with TestClient(create_app(database_settings(url))) as client:
+        assert client.get("/api/cameras").json() == {"items": [], "total": 0}
+        # Reporting a real status brings the same row into the list, with no stale carry-over.
+        report = {"status": "online", "observed_at": "2026-10-27T12:05:00Z"}
+        assert client.put("/api/ai/cameras/camera-07/status", json=report).status_code == 200
+        listed = client.get("/api/cameras").json()
+        assert listed["total"] == 1 and listed["items"][0]["reported_status"] == "online"
+
+
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not set")
 def test_postgresql_migrations_and_persistence(event_payload):
     # Use an empty test database: the first upgrade applies database/schema.sql to it.
