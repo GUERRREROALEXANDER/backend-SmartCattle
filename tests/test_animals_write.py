@@ -112,8 +112,19 @@ def test_writing_without_a_token_is_rejected(auth_client, animal, method, path, 
     assert response.status_code == 401
 
 
-def test_recording_a_detection_needs_the_ai_key(secured_auth_client, owner_headers):
-    secured_auth_client.post(ANIMALS_URL, json={"tag": "A-441"}, headers=owner_headers)
+def test_recording_a_detection_needs_the_ai_key(secured_auth_client):
+    # Registered on this client. A token from the auth_client fixture belongs
+    # to a different application instance and its own user store, so it would
+    # be rejected here and nothing would be created.
+    token = secured_auth_client.post("/api/auth/register", json={
+        "email": "ana@finca.example", "password": "una-clave-larga", "full_name": "Ana",
+    }).json()["access_token"]
+    created = secured_auth_client.post(
+        ANIMALS_URL, json={"tag": "A-441"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert created.status_code == 201
+
     body = {"camera_id": "camera-02", "detected_at": "2026-10-29T12:00:00Z"}
 
     # The caller is the vision service, which holds the shared key, so a user
