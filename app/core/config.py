@@ -14,6 +14,20 @@ class Settings(BaseSettings):
     ai_api_key: SecretStr | None = None
     database_url: SecretStr | None = None
     camera_offline_after_seconds: int = Field(default=60, ge=10, le=3600)
+    # Signs the access tokens. Unset means authentication is off: /api/auth/*
+    # answers 503 and nothing is protected. That is the state of a deployment
+    # that has not configured it yet, and create_app warns about it.
+    jwt_secret: SecretStr | None = None
+    # One hour. Long enough that the farm staff are not signing in repeatedly,
+    # short enough that a stolen token stops working within the shift. There is
+    # no refresh token and no revocation list, so this is the only thing that
+    # ends a session server-side.
+    access_token_minutes: int = Field(default=60, ge=5, le=1440)
+    # Failed logins per address before it is refused for a while. Counted in
+    # the process rather than the database: a counter that survives a restart
+    # needs a table, and what this blocks is a fast loop, not a patient one.
+    max_login_attempts: int = Field(default=5, ge=3, le=50)
+    login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
 
     @field_validator("allowed_origins")
     @classmethod
@@ -25,7 +39,7 @@ class Settings(BaseSettings):
             raise ValueError("CORS origins must start with http:// or https://")
         return value
 
-    @field_validator("smartcattle_ai_url", "ai_api_key", "database_url", mode="before")
+    @field_validator("smartcattle_ai_url", "ai_api_key", "database_url", "jwt_secret", mode="before")
     @classmethod
     def empty_to_none(cls, value: object) -> object:
         return None if value == "" else value
@@ -44,6 +58,11 @@ class Settings(BaseSettings):
             if url.startswith(prefix):
                 return "postgresql+psycopg://" + url[len(prefix):]
         return url
+
+    @property
+    def auth_enabled(self) -> bool:
+        """Whether JWT_SECRET is configured. False means /api/auth/* answers 503."""
+        return self.jwt_secret is not None
 
     @property
     def storage_name(self) -> str:
