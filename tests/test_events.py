@@ -156,3 +156,78 @@ def test_the_level_survives_the_listing(client, event_payload):
     created = client.post("/api/ai/events", json=event_payload | {"confidence": 0.95}).json()
     listed = client.get("/api/events").json()["items"][0]
     assert listed["level"] == created["level"] == "high"
+
+
+@pytest.fixture
+def feed(client, event_payload):
+    """Nine events: three cameras, three severities."""
+    for index in range(9):
+        client.post("/api/ai/events", json=event_payload | {
+            "camera_id": f"camera-0{index % 3}",
+            # 0.95 high, 0.75 medium, 0.4 low
+            "confidence": [0.95, 0.75, 0.4][index % 3],
+        })
+    return client
+
+
+def test_the_feed_pages(feed):
+    first = feed.get("/api/events", params={"limit": 4}).json()
+    assert len(first["items"]) == 4
+    # total is the match count, not the page length: a client paging on
+    # len(items) can never tell whether there is more.
+    assert first["total"] == 9
+
+    second = feed.get("/api/events", params={"limit": 4, "offset": 4}).json()
+    assert len(second["items"]) == 4
+    assert second["total"] == 9
+    # No overlap between the pages.
+    assert not {item["id"] for item in first["items"]} & {item["id"] for item in second["items"]}
+
+
+def test_the_last_page_is_short_but_the_total_is_not(feed):
+    last = feed.get("/api/events", params={"limit": 4, "offset": 8}).json()
+    assert len(last["items"]) == 1
+    assert last["total"] == 9
+
+
+def test_an_offset_past_the_end_is_empty_not_an_error(feed):
+    page = feed.get("/api/events", params={"offset": 100}).json()
+    assert page["items"] == []
+    assert page["total"] == 9
+
+
+def test_the_camera_filter_narrows_the_total_too(feed):
+    page = feed.get("/api/events", params={"camera_id": "camera-01"}).json()
+    assert page["total"] == 3
+    assert {item["camera_id"] for item in page["items"]} == {"camera-01"}
+
+
+def test_the_level_filter_selects(feed):
+    page = feed.get("/api/events", params={"level": "high"}).json()
+    assert page["total"] == 3
+    assert {item["level"] for item in page["items"]} == {"high"}
+
+
+def test_filters_combine(feed):
+    page = feed.get("/api/events", params={"camera_id": "camera-01", "level": "medium"}).json()
+    assert page["total"] == 3
+    page = feed.get("/api/events", params={"camera_id": "camera-01", "level": "high"}).json()
+    assert page["total"] == 0
+
+
+def test_an_unknown_filter_value_is_rejected(feed):
+    assert feed.get("/api/events", params={"level": "urgentisimo"}).status_code == 422
+    assert feed.get("/api/events", params={"event_type": "nope"}).status_code == 422
+
+
+@pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 201}, {"offset": -1}])
+def test_an_unusable_page_is_rejected(feed, params):
+    # An unbounded limit is a way to ask the server to serialise its whole
+    # history on request.
+    assert feed.get("/api/events", params=params).status_code == 422
+
+
+def test_the_newest_comes_first(feed):
+    items = feed.get("/api/events").json()["items"]
+    received = [item["received_at"] for item in items]
+    assert received == sorted(received, reverse=True)
