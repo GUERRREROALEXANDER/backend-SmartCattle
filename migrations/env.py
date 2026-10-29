@@ -30,10 +30,15 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     engine = create_engine(database_url(), poolclass=pool.NullPool)
-    with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+    try:
+        with engine.connect() as connection:
+            context.configure(connection=connection, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        # The test suite runs alembic many times in one process; each engine
+        # left behind is an unclosed database at collection time.
+        engine.dispose()
 
 
 if context.is_offline_mode():

@@ -6,13 +6,34 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect, text
+from sqlalchemy import Engine, inspect, text
 
 from app.core.config import Settings
 from app.db import create_db_engine
 from app.main import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def engine_for():
+    """Opens engines and disposes them when the test ends.
+
+    pyproject turns warnings into errors, and an engine left open emits
+    ResourceWarning: unclosed database once the garbage collector reaches it.
+    That surfaced on CI, where collection happens at a different moment than
+    it does locally.
+    """
+    opened = []
+
+    def open_engine(url: str) -> Engine:
+        engine = create_db_engine(url)
+        opened.append(engine)
+        return engine
+
+    yield open_engine
+    for engine in opened:
+        engine.dispose()
 
 
 def alembic_config(url: str) -> Config:
@@ -50,12 +71,12 @@ def exercise_app(settings: Settings, event_payload: dict) -> None:
         assert client.get("/api/cameras").json()["total"] == 1
 
 
-def test_sqlite_migrations_and_persistence(tmp_path, event_payload, video_analysis_payload):
+def test_sqlite_migrations_and_persistence(tmp_path, event_payload, video_analysis_payload, engine_for):
     url = f"sqlite:///{(tmp_path / 'smartcattle.db').as_posix()}"
     command.upgrade(alembic_config(url), "head")
     assert {
         "cameras", "events", "video_analyses", "video_analysis_alerts", "alembic_version",
-    } <= set(inspect(create_db_engine(url)).get_table_names())
+    } <= set(inspect(engine_for(url)).get_table_names())
     settings = database_settings(url)
     exercise_app(settings, event_payload)
     with TestClient(create_app(settings)) as client:
@@ -70,17 +91,17 @@ def test_sqlite_migrations_and_persistence(tmp_path, event_payload, video_analys
         assert metrics["alerts_since"] == 1
     command.downgrade(alembic_config(url), "base")
     # Only the backend-owned additions go; the shared tables and their rows stay.
-    engine = create_db_engine(url)
+    engine = engine_for(url)
     assert "stream_url" not in {column["name"] for column in inspect(engine).get_columns("cameras")}
     assert not {"video_analyses", "video_analysis_alerts"} & set(inspect(engine).get_table_names())
     with engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM events")).scalar_one() == 3
 
 
-def test_rows_from_other_services_are_kept_and_not_listed(tmp_path, event_payload):
+def test_rows_from_other_services_are_kept_and_not_listed(tmp_path, event_payload, engine_for):
     url = f"sqlite:///{(tmp_path / 'smartcattle.db').as_posix()}"
     command.upgrade(alembic_config(url), "0001_shared_schema")
-    with create_db_engine(url).begin() as connection:
+    with engine_for(url).begin() as connection:
         connection.execute(text("INSERT INTO cameras (name) VALUES ('Main camera')"))
         connection.execute(text("INSERT INTO events (type, camera_id) VALUES ('cattle_out_of_zone', 1)"))
     command.upgrade(alembic_config(url), "head")
@@ -90,7 +111,7 @@ def test_rows_from_other_services_are_kept_and_not_listed(tmp_path, event_payloa
         assert client.get("/api/events").json()["total"] == 0
         assert client.post("/api/ai/events", json=event_payload).status_code == 201
         assert client.get("/api/events").json()["total"] == 1
-    with create_db_engine(url).connect() as connection:
+    with engine_for(url).connect() as connection:
         assert connection.execute(text("SELECT name FROM cameras ORDER BY id")).scalars().all() == [
             "Main camera", "camera-01"]
 
@@ -118,10 +139,10 @@ def foreign_event(connection, camera: str, **columns) -> None:
     # A type this backend does not model, e.g. an event kind added by the AI service.
     ("camera-n3", {"type": "person_detected"}),
 ])
-def test_unrepresentable_rows_do_not_break_the_feed(tmp_path, event_payload, camera, columns):
+def test_unrepresentable_rows_do_not_break_the_feed(tmp_path, event_payload, camera, columns, engine_for):
     url = f"sqlite:///{(tmp_path / 'foreign.db').as_posix()}"
     command.upgrade(alembic_config(url), "head")
-    with create_db_engine(url).begin() as connection:
+    with engine_for(url).begin() as connection:
         foreign_event(connection, camera, **columns)
     settings = database_settings(url)
     with TestClient(create_app(settings)) as client:
@@ -134,10 +155,10 @@ def test_unrepresentable_rows_do_not_break_the_feed(tmp_path, event_payload, cam
         assert client.get("/api/events").json() == {"items": [created], "total": 1}
 
 
-def test_camera_without_a_reported_status_is_not_listed(tmp_path, event_payload):
+def test_camera_without_a_reported_status_is_not_listed(tmp_path, event_payload, engine_for):
     url = f"sqlite:///{(tmp_path / 'cameras.db').as_posix()}"
     command.upgrade(alembic_config(url), "head")
-    with create_db_engine(url).begin() as connection:
+    with engine_for(url).begin() as connection:
         # A timestamp without a status: what a direct UPDATE or another writer leaves behind.
         connection.execute(text(
             "INSERT INTO cameras (name, last_report_at) VALUES ('camera-07', '2026-10-27 12:00:00+00:00')"
@@ -152,14 +173,14 @@ def test_camera_without_a_reported_status_is_not_listed(tmp_path, event_payload)
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not set")
-def test_postgresql_migrations_and_persistence(event_payload):
+def test_postgresql_migrations_and_persistence(event_payload, engine_for):
     # Use an empty test database: the first upgrade applies database/schema.sql to it.
     settings = database_settings(os.environ["TEST_DATABASE_URL"])
     assert settings.storage_name == "postgresql"
     config = alembic_config(settings.sqlalchemy_url)
     command.downgrade(config, "base")
     command.upgrade(config, "head")
-    engine = create_db_engine(settings.sqlalchemy_url)
+    engine = engine_for(settings.sqlalchemy_url)
     try:
         exercise_app(settings, event_payload)
     finally:
