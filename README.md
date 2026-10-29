@@ -42,15 +42,22 @@ app/
   __init__.py
   main.py                  create_app(): picks SQL or memory stores
   db.py                    SQLAlchemy Base, engine and sessions
-  models.py                shared cameras/events and backend-owned video analysis tables
+  models.py                shared cameras/events/users/animals/zones and backend-owned video analysis tables
+  dependencies.py          every provider the routes resolve out of app.state
+  middleware.py            request id, access log
   core/config.py
+  core/security.py         password hashing and access tokens
   routes/health.py
+  routes/auth.py
   routes/animals.py
+  routes/zones.py
   routes/events.py
   routes/cameras.py
   routes/videos.py
   routes/metrics.py
+  schemas/auth.py
   schemas/animal.py
+  schemas/zone.py
   schemas/camera.py
   schemas/event.py
   schemas/video_analysis.py
@@ -224,8 +231,8 @@ Set `BACKEND_BASE_URL` in the frontend to `http://localhost:8000` for local deve
 | `/` | `{"name":"SmartCattle Backend","version":"<version>","docs":"/docs"}` |
 | `/health` | `{"status":"ok"}` |
 | `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory"}` (`configured` may be `true`) |
-| `/api/animals` | `{"items":[],"total":0}` |
-| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
+| `/api/animals` | `{"items":[{"tag":"A-441","name":"Lucera","status":"active","camera_id":"camera-01","last_detection":null,"created_at":"<UTC>","updated_at":"<UTC>"}],"total":1}` (empty: `{"items":[],"total":0}`) |
+| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z","level":"high"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
 | `/api/cameras` | `{"items":[{"id":"camera-01","reported_status":"online","status":"online","last_report_at":"<UTC>","last_online_at":"<UTC>","last_error":null,"frame_width":1280,"frame_height":720,"fps":14.8}],"total":1}` (no camera yet: `{"items":[],"total":0}`) |
 | `/api/videos/analyses` | `{"items":[{"id":"<uuid>","video_name":"pasture-test.mp4","duration_sec":12.5,"frames_analyzed":125,"max_cattle":4,"max_people":1,"alerts":[{"track_id":7,"cls":"cattle","time_sec":3.2,"id":1}],"avg_confidence":0.91,"outside_ratio":0.25,"alert_count":1,"created_at":"<UTC>"}],"total":1}` |
 | `/api/metrics/summary` | `{"animals_inside":3,"animals_outside":1,"alerts_today":2,"alerts_since":null,"detections_per_minute":0.03333333333333333}` (`since` adds an integer `alerts_since`; animal counts may be null) |
@@ -234,7 +241,14 @@ Validation errors (422) use `{"detail":[{"type":"<error type>","loc":["body","<f
 
 ## API documentation
 
-Open `/docs` for Swagger UI or `/redoc` for ReDoc. In `/docs`, use **Authorize** to supply `X-API-Key`. The event schema includes descriptions and a complete example.
+Open `/docs` for Swagger UI or `/redoc` for ReDoc. **Authorize** offers both
+schemes, and which one an endpoint needs is not interchangeable:
+
+- `HTTPBearer` — paste the `access_token` from `/api/auth/login`. For the herd,
+  the zones and saving a video analysis.
+- `APIKeyHeader` — `X-API-Key`, for the endpoints the AI service calls.
+
+The event schema includes descriptions and a complete example.
 
 ## Environment variables
 
@@ -247,6 +261,10 @@ Settings load from `.env` and the environment; environment variables take preced
 | `AI_API_KEY` | Empty | Optional shared key for event and camera status ingestion; empty means unset. Set it in production. |
 | `DATABASE_URL` | Empty | PostgreSQL URL. Empty means in-memory storage. Never exposed by any endpoint. |
 | `CAMERA_OFFLINE_AFTER_SECONDS` | `60` | A camera without a report for longer than this (10–3600) is shown as `offline`. |
+| `JWT_SECRET` | Empty | Signs the access tokens. **Empty means authentication is off:** `/api/auth/*` answers 503 and nothing is protected. Rejected below 32 bytes; changing it signs everyone out. |
+| `ACCESS_TOKEN_MINUTES` | `60` | Access token lifetime (5–1440). There is no refresh token, so this is the whole session. |
+| `MAX_LOGIN_ATTEMPTS` | `5` | Failed logins per address (3–50) before it is refused. Counted per process; a restart clears it. |
+| `LOGIN_LOCKOUT_SECONDS` | `300` | How long a locked address is refused (30–3600). |
 
 When `AI_API_KEY` is unset, ingestion is open for development. CORS allows GET, POST and PUT, accepts Content-Type and X-API-Key, and does not allow credentials. Status responses never expose the AI URL, key or database URL.
 
