@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -94,10 +94,13 @@ def test_api_key(secured_client, event_payload, key, expected):
 
 def test_store_capacity_and_reception_order(event_payload):
     store = InMemoryEventStore()
+    # An explicit receipt time per event, so the order under test is the one the
+    # store keeps and not whatever the wall clock happened to return.
+    received_at = datetime(2026, 10, 27, 12, tzinfo=UTC)
     created = []
     for index in range(1002):
         data = AIEventCreate(**(event_payload | {"camera_id": str(index)}))
-        created.append(store.add(data))
+        created.append(store.add(data, received_at + timedelta(seconds=index)))
     events = store.list()
     assert len(events) == 1000
     assert events == list(reversed(created[2:]))
@@ -115,3 +118,13 @@ def test_missing_api_key_logs_warning(settings, caplog):
     assert [record.message for record in caplog.records if record.message.startswith("AI_API_KEY is not set")] == [
         "AI_API_KEY is not set; POST /api/ai/events accepts unauthenticated requests",
     ]
+
+
+def test_received_at_comes_from_the_injected_clock(client, event_payload):
+    # The store used to stamp datetime.now() itself, so overriding the clock
+    # changed what the metrics saw but not what was written.
+    frozen = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+    client.app.state.clock = lambda: frozen
+    created = client.post("/api/ai/events", json=event_payload).json()
+    assert created["received_at"] == "2026-10-27T12:00:00Z"
+    assert client.get("/api/events").json()["items"][0]["received_at"] == "2026-10-27T12:00:00Z"

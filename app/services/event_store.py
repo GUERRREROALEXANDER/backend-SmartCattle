@@ -21,7 +21,7 @@ Events = list[Event]
 
 
 class EventStore(Protocol):
-    def add(self, data: AIEventCreate) -> Event: ...
+    def add(self, data: AIEventCreate, received_at: datetime) -> Event: ...
 
     def list(self) -> Events: ...
 
@@ -35,9 +35,9 @@ class InMemoryEventStore:
         self._events: deque[Event] = deque(maxlen=MAX_LISTED_EVENTS)
         self._lock = Lock()
 
-    def add(self, data: AIEventCreate) -> Event:
+    def add(self, data: AIEventCreate, received_at: datetime) -> Event:
         with self._lock:
-            event = Event(**data.model_dump(), id=uuid4(), received_at=datetime.now(UTC))
+            event = Event(**data.model_dump(), id=uuid4(), received_at=received_at)
             self._events.append(event)
             return event
 
@@ -93,8 +93,8 @@ class SqlEventStore:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
-    def add(self, data: AIEventCreate) -> Event:
-        event = Event(**data.model_dump(), id=uuid4(), received_at=datetime.now(UTC))
+    def add(self, data: AIEventCreate, received_at: datetime) -> Event:
+        event = Event(**data.model_dump(), id=uuid4(), received_at=received_at)
         with self._sessions.begin() as session:
             # events.camera_id references cameras.id, so a camera seen for the first time gets a row.
             camera = camera_row(session, event.camera_id)

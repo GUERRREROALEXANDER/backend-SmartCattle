@@ -33,7 +33,7 @@ def create_video_analysis(
             event_store.add(AIEventCreate(
                 event_type=EventType.CATTLE_OUT_OF_ZONE, camera_id=VIDEO_CAMERA_ID,
                 detected_object="cow", confidence=data.avg_confidence, timestamp=created_at,
-            ))
+            ), created_at)
     return analysis
 
 

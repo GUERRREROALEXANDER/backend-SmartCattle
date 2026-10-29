@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
@@ -34,5 +34,9 @@ def report_camera_status(
     report: CameraStatusReport,
     store: CameraStore = Depends(get_camera_store),
     settings: Settings = Depends(get_app_settings),
+    clock: Clock = Depends(get_clock),
 ) -> Camera:
-    return _camera(store.report(camera_id, report), datetime.now(UTC), settings)
+    # One reading of the clock: the stored timestamp and the status derived
+    # from it must agree, or a fresh report could come back already offline.
+    now = clock()
+    return _camera(store.report(camera_id, report, now), now, settings)

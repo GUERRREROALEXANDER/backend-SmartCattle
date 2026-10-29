@@ -19,7 +19,7 @@ REPORTED_FIELDS = (
 
 
 class CameraStore(Protocol):
-    def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord: ...
+    def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord: ...
 
     def list(self) -> list[CameraRecord]: ...
 
@@ -29,9 +29,9 @@ class InMemoryCameraStore:
         self._cameras: dict[str, CameraRecord] = {}
         self._lock = Lock()
 
-    def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
+    def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
         with self._lock:
-            record = apply_report(self._cameras.get(camera_id), camera_id, report, datetime.now(UTC))
+            record = apply_report(self._cameras.get(camera_id), camera_id, report, received_at)
             self._cameras[camera_id] = record
             return record
 
@@ -87,14 +87,13 @@ class SqlCameraStore:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
-    def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
-        now = datetime.now(UTC)
+    def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
         with self._sessions.begin() as session:
             row = camera_row(session, camera_id, lock=True)
             # A row with no status yet has nothing to carry over.
             reported_before = row.last_report_at is not None and row.reported_status is not None
             previous = _to_record(row) if reported_before else None
-            record = apply_report(previous, camera_id, report, now)
+            record = apply_report(previous, camera_id, report, received_at)
             row.reported_status = record.reported_status.value
             for field in REPORTED_FIELDS:
                 setattr(row, field, getattr(record, field))
