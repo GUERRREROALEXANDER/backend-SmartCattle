@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app import __version__
@@ -62,8 +63,16 @@ def test_unhandled_error_is_generic(settings, caplog):
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/test-error")
     assert response.status_code == 500
-    assert response.json() == {"detail": "Internal server error"}
+    body = response.json()
+    # The message stays generic: an exception string can carry a connection
+    # string or a row of data.
+    assert body["detail"] == "Internal server error"
+    assert "Internal diagnostic" not in response.text
     assert "Unhandled application error" in caplog.text
+
+    # And it is correlatable. The id in the body matches the header, which is
+    # what lets a user quote it without opening developer tools.
+    assert body["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_api_key_is_documented(client):
@@ -72,3 +81,53 @@ def test_api_key_is_documented(client):
         "type": "apiKey", "in": "header", "name": "X-API-Key",
     }
     assert schema["paths"]["/api/ai/events"]["post"]["security"] == [{"APIKeyHeader": []}]
+
+
+def test_every_response_carries_a_request_id(client):
+    response = client.get("/health")
+    request_id = response.headers["X-Request-ID"]
+    assert len(request_id) == 32
+    # A different id per request, or correlation means nothing.
+    assert client.get("/health").headers["X-Request-ID"] != request_id
+
+
+def test_a_supplied_request_id_is_kept(client):
+    # So a retrying frontend, or a proxy, keeps one id across the hop instead
+    # of the chain breaking at our door.
+    response = client.get("/health", headers={"X-Request-ID": "frontend-retry-7"})
+    assert response.headers["X-Request-ID"] == "frontend-retry-7"
+
+
+@pytest.mark.parametrize("supplied", [
+    "",
+    "   ",
+    "with space",
+    "line\nbreak",
+    'quote"and{brace}',
+    "x" * 65,
+])
+def test_an_unusable_request_id_is_replaced(client, supplied):
+    # Echoing arbitrary caller text into every log line lets whoever sends it
+    # forge log entries, and an oversized one bloats every line it touches.
+    response = client.get("/health", headers={"X-Request-ID": supplied})
+    returned = response.headers["X-Request-ID"]
+    assert returned != supplied
+    assert len(returned) == 32
+
+
+def test_the_request_id_is_logged_with_the_access_line(client, caplog):
+    with caplog.at_level("INFO", logger="app.middleware"):
+        response = client.get("/health")
+    request_id = response.headers["X-Request-ID"]
+
+    # In the formatted message, not only in extra. Render shows uvicorn's
+    # default format, which drops extras, so an id only in extra is invisible
+    # exactly where it is needed.
+    assert request_id in caplog.text
+    assert "/health" in caplog.text
+
+    # And in extra, for a structured handler if one is ever configured.
+    access = [record for record in caplog.records if record.name == "app.middleware"][-1]
+    assert access.request_id == request_id
+    assert access.status == 200
+    assert access.path == "/health"

@@ -60,7 +60,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             # because a failure inside another middleware never reaches that
             # handler and would otherwise vanish.
             logger.exception(
-                "request failed", extra={
+                "[%s] request failed: %s %s", request_id, request.method, request.url.path,
+                extra={
                     "request_id": request_id,
                     "method": request.method,
                     "path": request.url.path,
@@ -70,9 +71,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
         duration_ms = (time.perf_counter() - started) * 1000
         response.headers[REQUEST_ID_HEADER] = request_id
+        # The id is in the message as well as in extra. Render shows uvicorn's
+        # default format, which drops extras entirely, so an id only in extra
+        # is invisible exactly where it is needed. extra is kept for a
+        # structured handler, if one is ever configured.
         logger.info(
-            "%s %s -> %s in %.1f ms",
-            request.method, request.url.path, response.status_code, duration_ms,
+            "[%s] %s %s -> %s in %.1f ms",
+            request_id, request.method, request.url.path, response.status_code, duration_ms,
             extra={
                 "request_id": request_id,
                 "method": request.method,

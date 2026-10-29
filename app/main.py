@@ -13,6 +13,7 @@ from sqlalchemy import Engine
 from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
+from app.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.routes import animals, auth, cameras, events, health, metrics, videos, zones
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
@@ -76,10 +77,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.warning("AI_API_KEY is not set; POST /api/ai/events accepts unauthenticated requests")
     if not settings.auth_enabled:
         logger.warning("JWT_SECRET is not set; /api/auth/* returns 503 and no endpoint is protected")
+    # Added before CORS so it wraps it: a request rejected by CORS still gets
+    # an id and a log line, which is what makes a CORS problem diagnosable
+    # instead of a silent browser failure.
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
         allow_methods=["GET", "POST", "PUT"],
-        allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+        allow_headers=["Content-Type", "X-API-Key", "Authorization", REQUEST_ID_HEADER],
+        # So the browser can read the id off the response and report it.
+        expose_headers=[REQUEST_ID_HEADER],
     )
     app.include_router(health.router)
     app.include_router(auth.router)
@@ -110,9 +117,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": detail})
 
     @app.exception_handler(Exception)
-    async def handle_unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled application error", exc_info=exc)
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logger.exception(
+            "Unhandled application error", exc_info=exc, extra={"request_id": request_id},
+        )
+        # The id goes in the body as well as the header, so a user can quote it
+        # from an error message without opening developer tools. The message
+        # itself stays generic: an exception string can carry a connection
+        # string or a row of data.
+        content: dict[str, str] = {"detail": "Internal server error"}
+        headers: dict[str, str] = {}
+        if request_id is not None:
+            content["request_id"] = request_id
+            # Set here too. Starlette's ServerErrorMiddleware is outermost, so
+            # this response is built outside RequestContextMiddleware and never
+            # passes back through it -- the header it would have added is
+            # missing on exactly the responses that most need correlating.
+            headers[REQUEST_ID_HEADER] = request_id
+        return JSONResponse(status_code=500, content=content, headers=headers)
 
     return app
 
