@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core import security
 from app.core.config import Settings
 from app.main import create_app
 
@@ -108,3 +109,21 @@ def worker(auth_client, owner):
 @pytest.fixture
 def worker_headers(worker):
     return {"Authorization": f"Bearer {worker['access_token']}"}
+
+
+@pytest.fixture(autouse=True)
+def cheap_password_hashing(monkeypatch):
+    """Runs bcrypt at its minimum cost for the whole suite.
+
+    The work factor is the entire point of bcrypt in production and buys
+    nothing in a test: cost 12 is around a tenth of a second per hash, and the
+    auth fixtures hash several times per test. At cost 4 the suite is a few
+    seconds instead of half a minute.
+
+    What is deliberately NOT changed is the algorithm or the verification path,
+    so every property the tests assert -- per-row salt, the 72-byte limit,
+    rejecting a malformed hash -- still holds. test_security pins the
+    production default separately, so lowering it here cannot hide a change to
+    the real value.
+    """
+    monkeypatch.setattr(security, "BCRYPT_ROUNDS", 4)

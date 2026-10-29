@@ -34,13 +34,21 @@ class PasswordTooLongError(ValueError):
     """Raised instead of letting bcrypt ignore everything past 72 bytes."""
 
 
-def hash_password(password: str) -> str:
+def hash_password(password: str, *, rounds: int | None = None) -> str:
+    """Hashes a password with bcrypt.
+
+    `rounds` exists for the test suite, which runs at the minimum cost: the
+    work factor is what makes hashing slow, and paying it on every fixture
+    turns a fast suite into a slow one without testing anything extra. It
+    defaults to BCRYPT_ROUNDS so application code cannot weaken it by omission.
+    """
     encoded = password.encode("utf-8")
     if len(encoded) > MAX_PASSWORD_BYTES:
         raise PasswordTooLongError(
             f"password must be at most {MAX_PASSWORD_BYTES} bytes, got {len(encoded)}"
         )
-    return bcrypt.hashpw(encoded, bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("utf-8")
+    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS if rounds is None else rounds)
+    return bcrypt.hashpw(encoded, salt).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:

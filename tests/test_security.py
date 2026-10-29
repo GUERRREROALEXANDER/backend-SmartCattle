@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 
+from app.core import security as security_module
 from app.core.security import (
     ALGORITHM,
     MAX_PASSWORD_BYTES,
@@ -165,3 +166,26 @@ def test_decode_uses_the_clock_it_is_given():
     )
     assert decode_access_token(token, secret=SECRET, now=NOW) is not None
     assert decode_access_token(token, secret=SECRET, now=NOW + timedelta(hours=1)) is None
+
+
+def test_the_production_work_factor_is_not_lowered():
+    """The suite runs bcrypt at cost 4; this pins what production uses.
+
+    Read from the source with ast rather than from the imported module, because
+    the autouse fixture has lowered the attribute and a reload would mutate
+    module state other tests are still holding references into.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(security_module.__file__).read_text(encoding="utf-8")
+    declared = {
+        target.id: node.value.value
+        for node in ast.parse(source).body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert declared["BCRYPT_ROUNDS"] >= 12
+    assert declared["MAX_PASSWORD_BYTES"] == 72
+    assert declared["ALGORITHM"] == "HS256"
