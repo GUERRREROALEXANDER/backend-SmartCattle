@@ -5,6 +5,18 @@ CAMERA_URL = "/api/zones/camera/camera-01"
 RECTANGLE = {"name": "Safe zone", "x_min": 0.1, "y_min": 0.1, "x_max": 0.9, "y_max": 0.9}
 
 
+def call(client, method, url, body, headers):
+    """Issues a request, omitting the body for the methods that take none.
+
+    httpx's get() and delete() have no json parameter, so passing one raises a
+    TypeError that reads as a test bug rather than a response.
+    """
+    kwargs = {} if headers is None else {"headers": headers}
+    if body is not None:
+        kwargs["json"] = body
+    return getattr(client, method)(url, **kwargs)
+
+
 @pytest.fixture
 def zone(auth_client, owner_headers):
     return auth_client.post(CAMERA_URL, json=RECTANGLE, headers=owner_headers).json()
@@ -80,9 +92,7 @@ def test_a_worker_may_read_the_zones(auth_client, worker_headers, zone):
 def test_a_worker_may_not_change_the_zones(auth_client, worker_headers, zone, method, path, body):
     # The widest-effect write in the API: the zone is what every detection is
     # compared against.
-    response = getattr(auth_client, method)(
-        f"{ZONES_URL}{path}", json=body, headers=worker_headers,
-    )
+    response = call(auth_client, method, f"{ZONES_URL}{path}", body, worker_headers)
     assert response.status_code == 403
 
 
@@ -96,5 +106,5 @@ def test_a_worker_may_not_change_the_zones(auth_client, worker_headers, zone, me
 def test_zones_are_not_public(auth_client, zone, method, path, body):
     # Reads included: a zone describes where the farm's animals are meant to
     # be, which is not something to hand to an anonymous caller.
-    response = getattr(auth_client, method)(f"{ZONES_URL}{path}", json=body)
+    response = call(auth_client, method, f"{ZONES_URL}{path}", body, None)
     assert response.status_code == 401
