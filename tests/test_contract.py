@@ -4,6 +4,9 @@ The OpenAPI document and the CORS headers are what a client actually
 integrates against, and both can break without any handler changing.
 """
 
+import pytest
+from fastapi.testclient import TestClient
+
 ORIGIN = "http://localhost:5173"
 
 
@@ -75,3 +78,55 @@ def test_an_unlisted_origin_is_not_allowed(client):
     # server -- but the allow header must not name an origin that is not
     # configured.
     assert response.headers.get("access-control-allow-origin") != "https://somewhere-else.example"
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/api/animals"),
+    ("POST", "/api/animals"),
+    ("PATCH", "/api/animals/A-441"),
+    ("POST", "/api/animals/A-441/deactivate"),
+    ("PUT", "/api/ai/cameras/camera-01/status"),
+    ("GET", "/api/zones"),
+    ("POST", "/api/zones/camera/camera-01"),
+    ("PATCH", "/api/zones/1"),
+    ("DELETE", "/api/zones/1"),
+])
+def test_every_method_the_app_uses_survives_a_preflight(client, method, path):
+    """A route the browser cannot reach is a route that does not exist.
+
+    CORS is enforced by the browser and by nothing else, so curl and this
+    suite's own requests succeed against a method the preflight would refuse.
+    PATCH and DELETE were missing from allow_methods after the herd and zone
+    endpoints were added, which made them work everywhere except in the
+    product.
+    """
+    response = client.options(path, headers={
+        "Origin": "http://localhost:5173",
+        "Access-Control-Request-Method": method,
+        "Access-Control-Request-Headers": "authorization,content-type",
+    })
+    assert response.status_code == 200, f"{method} {path} is refused by the preflight"
+    allowed = response.headers["access-control-allow-methods"]
+    assert method in allowed
+
+
+def test_the_preflight_names_every_method_the_app_sends():
+    """The allow list is read once and compared to what the client sends.
+
+    A tighter version of this tried to derive the used methods from
+    app.routes and compare both directions. It is not worth the complexity:
+    a method allowed with no route behind it is untidy rather than broken,
+    and the direction that matters is already covered above.
+    """
+    from app.core.config import Settings
+    from app.main import create_app
+
+    settings = Settings(_env_file=None, smartcattle_ai_url=None, ai_api_key=None, database_url=None)
+    with TestClient(create_app(settings)) as client:
+        response = client.options("/api/animals", headers={
+            "Origin": ORIGIN, "Access-Control-Request-Method": "GET",
+        })
+        allowed = {method.strip() for method in response.headers["access-control-allow-methods"].split(",")}
+
+    # The five the frontend and the AI service between them actually send.
+    assert {"GET", "POST", "PUT", "PATCH", "DELETE"} <= allowed

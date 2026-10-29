@@ -83,7 +83,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT"],
+        # PATCH and DELETE are needed by the herd and zone endpoints. Without
+        # them the browser's preflight is refused and the request is never
+        # sent, while curl and the Node test suite succeed -- neither enforces
+        # CORS, so the endpoints look fine everywhere except in the product.
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "X-API-Key", "Authorization", REQUEST_ID_HEADER],
         # So the browser can read the id off the response and report it.
         expose_headers=[REQUEST_ID_HEADER],
