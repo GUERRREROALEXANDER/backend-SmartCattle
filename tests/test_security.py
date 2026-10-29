@@ -75,7 +75,7 @@ def test_token_carries_the_subject_and_role():
     token = create_access_token(
         subject="7", secret=SECRET, expires_in=timedelta(minutes=60), role="owner", now=NOW,
     )
-    claims = decode_access_token(token, secret=SECRET)
+    claims = decode_access_token(token, secret=SECRET, now=NOW)
     assert claims is not None
     assert claims["sub"] == "7"
     assert claims["role"] == "owner"
@@ -92,14 +92,17 @@ def test_each_token_has_its_own_id():
         for _ in range(2)
     )
     assert first != second
-    assert decode_access_token(first, secret=SECRET)["jti"] != decode_access_token(second, secret=SECRET)["jti"]
+    first_claims = decode_access_token(first, secret=SECRET, now=NOW)
+    second_claims = decode_access_token(second, secret=SECRET, now=NOW)
+    assert first_claims is not None and second_claims is not None
+    assert first_claims["jti"] != second_claims["jti"]
 
 
 def test_expired_token_is_rejected():
     token = create_access_token(
         subject="7", secret=SECRET, expires_in=timedelta(minutes=-1), role="owner", now=NOW,
     )
-    assert decode_access_token(token, secret=SECRET) is None
+    assert decode_access_token(token, secret=SECRET, now=NOW) is None
 
 
 def test_token_signed_with_another_secret_is_rejected():
@@ -107,14 +110,14 @@ def test_token_signed_with_another_secret_is_rejected():
         subject="7", secret="a-different-secret-also-long-enough", expires_in=timedelta(minutes=60),
         role="owner", now=NOW,
     )
-    assert decode_access_token(token, secret=SECRET) is None
+    assert decode_access_token(token, secret=SECRET, now=NOW) is None
 
 
 def test_unsigned_token_is_rejected():
     # The classic JWT flaw: alg=none, presented as if signed. Rejected because
     # decode pins the algorithm instead of reading it from the token.
     forged = jwt.encode({"sub": "7", "role": "owner"}, key="", algorithm="none")
-    assert decode_access_token(forged, secret=SECRET) is None
+    assert decode_access_token(forged, secret=SECRET, now=NOW) is None
 
 
 def test_token_without_a_subject_is_rejected():
@@ -125,9 +128,40 @@ def test_token_without_a_subject_is_rejected():
          "exp": int((NOW + timedelta(minutes=60)).timestamp())},
         SECRET, algorithm=ALGORITHM,
     )
-    assert decode_access_token(token, secret=SECRET) is None
+    assert decode_access_token(token, secret=SECRET, now=NOW) is None
 
 
 @pytest.mark.parametrize("junk", ["", "nope", "a.b.c", "Bearer x"])
 def test_malformed_token_is_rejected(junk):
-    assert decode_access_token(junk, secret=SECRET) is None
+    assert decode_access_token(junk, secret=SECRET, now=NOW) is None
+
+
+def test_token_issued_in_the_future_is_rejected():
+    # Beyond the skew tolerance. A token minted against a clock well ahead of
+    # ours is not yet valid, which is what stops a captured future-dated token
+    # from being usable early.
+    token = create_access_token(
+        subject="7", secret=SECRET, expires_in=timedelta(hours=2),
+        role="owner", now=NOW + timedelta(minutes=10),
+    )
+    assert decode_access_token(token, secret=SECRET, now=NOW) is None
+
+
+def test_small_clock_skew_is_tolerated():
+    # Within tolerance. The services run on different machines, so a second of
+    # drift must not reject a token that was just issued.
+    token = create_access_token(
+        subject="7", secret=SECRET, expires_in=timedelta(hours=2),
+        role="owner", now=NOW + timedelta(seconds=5),
+    )
+    assert decode_access_token(token, secret=SECRET, now=NOW) is not None
+
+
+def test_decode_uses_the_clock_it_is_given():
+    # The whole point of threading the clock through: a token valid at NOW must
+    # be rejected an hour later without touching the system clock.
+    token = create_access_token(
+        subject="7", secret=SECRET, expires_in=timedelta(minutes=30), role="owner", now=NOW,
+    )
+    assert decode_access_token(token, secret=SECRET, now=NOW) is not None
+    assert decode_access_token(token, secret=SECRET, now=NOW + timedelta(hours=1)) is None

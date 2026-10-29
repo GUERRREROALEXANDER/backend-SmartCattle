@@ -108,6 +108,7 @@ def current_user(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     secret: str = Depends(require_jwt_secret),
     store: UserStore = Depends(get_user_store),
+    clock: Clock = Depends(get_clock),
 ) -> StoredUser:
     """Resolves the bearer token to a user, or raises 401.
 
@@ -123,7 +124,7 @@ def current_user(
     )
     if credentials is None or not credentials.credentials:
         raise unauthorized
-    claims = decode_access_token(credentials.credentials, secret=secret)
+    claims = decode_access_token(credentials.credentials, secret=secret, now=clock())
     if claims is None:
         raise unauthorized
     try:

@@ -25,6 +25,10 @@ BCRYPT_ROUNDS = 12
 
 ALGORITHM = "HS256"
 
+#: Tolerance for a token that looks issued in the future. The services run
+#: on different machines, so a second of drift must not reject a fresh token.
+CLOCK_SKEW_SECONDS = 60
+
 
 class PasswordTooLongError(ValueError):
     """Raised instead of letting bcrypt ignore everything past 72 bytes."""
@@ -76,8 +80,8 @@ def create_access_token(
     return jwt.encode(payload, secret, algorithm=ALGORITHM)
 
 
-def decode_access_token(token: str, *, secret: str) -> dict[str, Any] | None:
-    """Returns the claims, or None for any token that is not valid right now.
+def decode_access_token(token: str, *, secret: str, now: datetime) -> dict[str, Any] | None:
+    """Returns the claims, or None for any token that is not valid at `now`.
 
     One return value for every failure on purpose: expired, wrong signature,
     wrong algorithm and malformed are all "not authenticated", and
@@ -86,14 +90,41 @@ def decode_access_token(token: str, *, secret: str) -> dict[str, Any] | None:
     `algorithms` is pinned to one value. Accepting the token's own `alg` is the
     classic JWT flaw: it lets a caller present an unsigned token and have it
     believed.
+
+    The time claims are checked here against `now` rather than left to PyJWT,
+    which reads the system clock. create_access_token already takes the
+    application's injected clock, and the two halves have to agree: a token
+    minted against a moved clock must verify against that same clock, or
+    issuing and accepting disagree inside one request.
     """
     try:
         claims: dict[str, Any] = jwt.decode(
             token,
             secret,
             algorithms=[ALGORITHM],
-            options={"require": ["sub", "exp", "iat"]},
+            options={
+                "require": ["sub", "exp", "iat"],
+                # Checked below against `now`, not the system clock.
+                "verify_exp": False,
+                "verify_iat": False,
+                "verify_nbf": False,
+            },
         )
     except InvalidTokenError:
+        return None
+
+    moment = now.astimezone(UTC).timestamp()
+    try:
+        expires_at = float(claims["exp"])
+        issued_at = float(claims["iat"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if moment >= expires_at:
+        return None
+    # A token issued in the future is not yet valid. CLOCK_SKEW_SECONDS of
+    # tolerance because the AI service and this backend run on different
+    # machines, and a second of drift must not reject a fresh token.
+    if issued_at - moment > CLOCK_SKEW_SECONDS:
         return None
     return claims
