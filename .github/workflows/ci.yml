@@ -32,8 +32,11 @@ jobs:
       - name: Type check
         run: mypy
 
-      - name: Test
-        run: pytest -q
+      - name: Test with coverage
+        # The threshold is a floor, not a target. It exists so a change that
+        # adds an untested branch is visible in the diff rather than discovered
+        # later; raising it is a decision, not a side effect of writing tests.
+        run: pytest -q --cov=app --cov=data_structures --cov-report=term-missing --cov-fail-under=90
 
       - name: Migrations apply to an empty database and roll back
         # Catches a revision that only works on a database already in the
