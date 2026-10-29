@@ -30,9 +30,14 @@ inference and camera capture, and also served the static frontend.
 
 ## 2. Backend responsibility
 
-In scope: REST API, receiving and validating AI events and simulated video
-summaries, querying animals, events, analyses and metrics, configuration and
-CORS. Later: notifications and authentication.
+In scope: REST API, authentication and roles, the herd and safe zone
+registries, receiving and validating AI events and simulated video summaries,
+querying animals, events, analyses and metrics, configuration and CORS.
+Later: notifications.
+
+Authentication was in the "later" column until the shared `users` table had a
+writer. It now exists; see [AUTHENTICATION.md](AUTHENTICATION.md) and
+[ROLES.md](ROLES.md).
 
 Out of scope: YOLO, OpenCV, model weights, camera capture, frame or video
 processing, HTML/CSS/JS.
@@ -41,17 +46,34 @@ processing, HTML/CSS/JS.
 
 ```
 app/
-  main.py            create_app(): CORS, routers, error handler
+  main.py            create_app(): middleware, CORS, routers, error handler
+  dependencies.py    every provider the routes resolve out of app.state
+  middleware.py      request id and access log
   core/config.py     Settings (environment variables)
-  routes/            health.py, animals.py, events.py, cameras.py, videos.py, metrics.py
-  schemas/           animal.py, event.py, camera.py, video_analysis.py, metrics.py, status.py
-  services/          memory and SQL event, camera and video analysis stores
+  core/security.py   password hashing and access tokens
+  routes/            health.py, auth.py, animals.py, zones.py, events.py,
+                     cameras.py, videos.py, metrics.py
+  schemas/           auth.py, animal.py, zone.py, event.py, camera.py,
+                     video_analysis.py, metrics.py, status.py
+  services/          memory and SQL stores: user, animal, zone, event, camera,
+                     video analysis; plus login_throttle.py
 tests/
 ```
 
 `app/api/` and `services/ai_service.py` from the initial proposal are
 omitted. They would have no real content today because the backend does not
 call the AI service yet. They will be added when that call exists.
+
+`dependencies.py` was added for a different reason. Each router used to
+declare the providers it happened to need first, so `cameras.py` imported the
+API-key check from `events.py` and `metrics.py` reached into `videos.py` for
+the clock -- `get_clock` existed twice in identical copies. The routers now
+depend on one module instead of on each other, and it is also the single place
+where Starlette's untyped `app.state` is turned back into a real type.
+
+`core/security.py` is separate from the routes and the stores because it is
+the one module where a mistake is a vulnerability rather than a bug, and it
+should be reviewable on its own.
 
 ## 4. `POST /api/ai/events` contract
 
@@ -169,3 +191,55 @@ The frontend performs the simulated analysis and posts only its summary; video b
 Each cattle alert is also represented as the existing `cattle_out_of_zone` event so event-driven metrics include uploads. The API camera id is `video-upload`; this is valid in the existing `cameras.name`/`events.camera_id` mapping and requires no schema alteration. Person alerts have no corresponding event type and remain only in `video_analysis_alerts`. Upload-generated events use `created_at` because a relative video offset cannot establish the original recording time.
 
 Summary metrics deliberately expose their data limitations. Animal inside/outside values are estimates from the latest analysis (distinct outside cattle tracks versus `max_cattle`), not a live herd registry. Event counts and the trailing-hour rate use UTC `detected_at` values from API-ingested events. The rate is stored events divided by 60, not raw frame detections. In-memory metrics are limited to the events retained by the existing 1000-event deque; SQL metric queries are not subject to the event feed's 1000-row response limit.
+
+## 9. Authentication decisions
+
+Recorded here because they are architectural rather than details of the
+endpoints. The endpoint behaviour is in
+[AUTHENTICATION.md](AUTHENTICATION.md).
+
+### Bearer tokens, not server-side sessions
+
+A session table would mean a database round trip per request and a backend
+that cannot authenticate at all without `DATABASE_URL` -- and the in-memory
+mode exists precisely so the API runs without one.
+
+The cost is that a token cannot be revoked. Tokens carry a `jti` so a
+revocation list has something to name when one is needed, and the lifetime is
+an hour rather than a day because expiry is currently the only thing that ends
+a session server-side.
+
+### The account is loaded on every request
+
+The signed claims cannot be forged, but they are a snapshot. Trusting the role
+from the token would let a deactivated account keep working until its token
+expired, which is the one case deactivation exists for. The cost is a lookup
+per request; the in-memory store makes it free and the SQL store makes it a
+primary key read.
+
+### Authentication is optional at the configuration level
+
+`JWT_SECRET` unset means `/api/auth/*` answers 503 and nothing is protected,
+rather than the application refusing to boot.
+
+A deployment that has not configured it keeps serving the AI ingestion and the
+dashboard it already serves. Refusing to start would turn adding a feature
+into an outage for everything that worked before it.
+
+### bcrypt, and the 72-byte limit is surfaced
+
+bcrypt truncates at 72 bytes and ignores the rest in silence, so a longer
+password would be accepted while only its prefix was ever checked -- two
+different passwords sharing 72 bytes would both open the account. The limit
+cannot be raised, so it is validated and reported instead.
+
+Measured in bytes rather than characters: the staff write in Spanish and an
+accented character is two bytes in UTF-8.
+
+### The AI key and the user token are not interchangeable
+
+`AI_API_KEY` guards the endpoints the vision service calls. It cannot guard
+anything the browser calls, because `VITE_` variables are public in the
+bundle. That is why `POST /api/videos/analyses` -- which writes into the shared
+events feed -- could not be protected until there were users to authenticate,
+and it is now behind a bearer token.
