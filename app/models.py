@@ -1,7 +1,20 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Identity, Integer, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,6 +55,33 @@ class EventRow(Base):
     bbox: Mapped[list[float] | None] = mapped_column("box", JSON().with_variant(JSONB, "postgresql"))
     timestamp: Mapped[datetime] = mapped_column("detected_at", DateTime(timezone=True))
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserRow(Base):
+    """The shared users table. Written only by this service.
+
+    password_hash holds a bcrypt hash and nothing else; see
+    database/schema.sql, which has specified that since before any code could
+    produce one.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    # Stored lower-cased. The shared schema enforces it with
+    # CHECK (email = lower(email)), which is what makes the UNIQUE mean
+    # anything: without it one address registers twice under two spellings.
+    email: Mapped[str] = mapped_column(Text, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    full_name: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text, server_default="worker")
+    # Access is withdrawn by clearing this, never by deleting the row: an
+    # account that is gone cannot be told apart from one that never existed.
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Added by migration 0005 in the database repository.
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class VideoAnalysisRow(Base):
