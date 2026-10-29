@@ -2,7 +2,7 @@ import logging
 import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -13,9 +13,11 @@ from sqlalchemy import Engine
 from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
-from app.routes import animals, cameras, events, health, metrics, videos
+from app.routes import animals, auth, cameras, events, health, metrics, videos
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
+from app.services.login_throttle import LoginThrottle
+from app.services.user_store import InMemoryUserStore, SqlUserStore
 from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_store = InMemoryEventStore()
         app.state.camera_store = InMemoryCameraStore()
         app.state.video_analysis_store = InMemoryVideoAnalysisStore()
+        app.state.user_store = InMemoryUserStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -56,13 +59,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.event_store = SqlEventStore(sessions)
         app.state.camera_store = SqlCameraStore(sessions)
         app.state.video_analysis_store = SqlVideoAnalysisStore(sessions)
+        app.state.user_store = SqlUserStore(sessions)
+    # Per process, not per worker: the lockout is best effort, and Render's
+    # free plan runs one worker anyway.
+    app.state.login_throttle = LoginThrottle(
+        max_attempts=settings.max_login_attempts,
+        lockout=timedelta(seconds=settings.login_lockout_seconds),
+    )
     if settings.ai_api_key is None:
         logger.warning("AI_API_KEY is not set; POST /api/ai/events accepts unauthenticated requests")
+    if not settings.auth_enabled:
+        logger.warning("JWT_SECRET is not set; /api/auth/* returns 503 and no endpoint is protected")
     app.add_middleware(
         CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type", "X-API-Key"],
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Content-Type", "X-API-Key", "Authorization"],
     )
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(animals.router)
     app.include_router(events.router)
     app.include_router(cameras.router)
