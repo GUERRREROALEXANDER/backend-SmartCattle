@@ -13,13 +13,19 @@ from app.services.camera_store import camera_row
 
 MAX_LISTED_EVENTS = 1000
 
+# Module-level alias. Inside these classes the name `list` is taken by the
+# method of the same name, so a bare `list[Event]` annotation would read as a
+# subscript of that method. The alias resolves in module scope, where `list`
+# still means the builtin, and keeps the signatures checkable.
+Events = list[Event]
+
 
 class EventStore(Protocol):
     def add(self, data: AIEventCreate) -> Event: ...
 
-    def list(self) -> list[Event]: ...
+    def list(self) -> Events: ...
 
-    def list_since(self, start: datetime) -> "list[Event]": ...
+    def list_since(self, start: datetime) -> Events: ...
 
 
 class InMemoryEventStore:
@@ -35,11 +41,11 @@ class InMemoryEventStore:
             self._events.append(event)
             return event
 
-    def list(self) -> list[Event]:
+    def list(self) -> Events:
         with self._lock:
             return list(reversed(self._events))
 
-    def list_since(self, start: datetime) -> "list[Event]":
+    def list_since(self, start: datetime) -> Events:
         with self._lock:
             return [event for event in self._events if event.timestamp >= start]
 
@@ -67,7 +73,7 @@ class SqlEventStore:
             ))
         return event
 
-    def list(self) -> list[Event]:
+    def list(self) -> Events:
         # Only events ingested through this API have the id, camera and fields the Event schema requires.
         query = (
             select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)
@@ -83,7 +89,7 @@ class SqlEventStore:
                 for row, camera in session.execute(query)
             ]
 
-    def list_since(self, start: datetime) -> "list[Event]":
+    def list_since(self, start: datetime) -> Events:
         # Metrics use detection time, and unlike the event feed this query has no 1000-row limit in SQL.
         query = (
             select(EventRow, CameraRow.name).join(CameraRow, EventRow.camera_id == CameraRow.id)

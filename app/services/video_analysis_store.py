@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import VideoAnalysisAlertRow, VideoAnalysisRow
 from app.schemas.video_analysis import (
@@ -17,10 +18,16 @@ from app.schemas.video_analysis import (
 )
 
 
+# Module-level aliases: inside these classes `list` is the method name, so a
+# bare `list[...]` annotation would read as a subscript of that method.
+Analyses = list[VideoAnalysis]
+AlertRows = list[VideoAnalysisAlertRow]
+
+
 class VideoAnalysisStore(Protocol):
     def add(self, data: VideoAnalysisCreate, created_at: datetime) -> VideoAnalysis: ...
 
-    def list(self, limit: int) -> list[VideoAnalysis]: ...
+    def list(self, limit: int) -> Analyses: ...
 
     def get(self, analysis_id: UUID) -> VideoAnalysis | None: ...
 
@@ -50,7 +57,7 @@ class InMemoryVideoAnalysisStore:
             self._analyses.append(analysis)
             return analysis
 
-    def list(self, limit: int) -> list[VideoAnalysis]:
+    def list(self, limit: int) -> Analyses:
         with self._lock:
             return list(reversed(self._analyses[-limit:]))
 
@@ -64,7 +71,7 @@ def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _to_analysis(row: VideoAnalysisRow, alerts: list[VideoAnalysisAlertRow]) -> VideoAnalysis:
+def _to_analysis(row: VideoAnalysisRow, alerts: AlertRows) -> VideoAnalysis:
     return VideoAnalysis(
         id=row.id, video_name=row.video_name, duration_sec=row.duration_sec,
         frames_analyzed=row.frames_analyzed, max_cattle=row.max_cattle, max_people=row.max_people,
@@ -100,7 +107,7 @@ class SqlVideoAnalysisStore:
             session.flush()
             return _to_analysis(row, alert_rows)
 
-    def list(self, limit: int) -> list[VideoAnalysis]:
+    def list(self, limit: int) -> Analyses:
         with self._sessions() as session:
             rows = session.scalars(
                 select(VideoAnalysisRow).order_by(VideoAnalysisRow.created_at.desc(), VideoAnalysisRow.id.desc())
@@ -116,10 +123,10 @@ class SqlVideoAnalysisStore:
             return self._with_alerts(session, [row])[0]
 
     @staticmethod
-    def _with_alerts(session, rows: list[VideoAnalysisRow]) -> list[VideoAnalysis]:
+    def _with_alerts(session: Session, rows: Sequence[VideoAnalysisRow]) -> Analyses:
         if not rows:
             return []
-        alerts_by_analysis: dict[UUID, list[VideoAnalysisAlertRow]] = {row.id: [] for row in rows}
+        alerts_by_analysis: dict[UUID, AlertRows] = {row.id: [] for row in rows}
         alerts = session.scalars(
             select(VideoAnalysisAlertRow)
             .where(VideoAnalysisAlertRow.analysis_id.in_(alerts_by_analysis))
