@@ -3,6 +3,10 @@ from functools import lru_cache
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: RFC 7518 section 3.2: an HMAC key should be at least the digest size,
+#: which is 32 bytes for SHA-256. PyJWT warns below this; we refuse.
+MIN_JWT_SECRET_BYTES = 32
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -37,6 +41,26 @@ class Settings(BaseSettings):
             raise ValueError("Wildcard CORS origins are not allowed")
         if any(not origin.startswith(("http://", "https://")) for origin in origins):
             raise ValueError("CORS origins must start with http:// or https://")
+        return value
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def secret_is_long_enough(cls, value: SecretStr | None) -> SecretStr | None:
+        """HS256 keys shorter than the hash are weak; PyJWT warns, we refuse.
+
+        RFC 7518 section 3.2 puts the floor at the digest size, 32 bytes for
+        SHA-256. A shorter key still signs and verifies, so nothing fails: the
+        tokens are just cheaper to forge, which is the kind of problem that
+        does not announce itself. Refusing at startup is the only point where
+        anyone is looking.
+        """
+        if value is None:
+            return None
+        if len(value.get_secret_value().encode("utf-8")) < MIN_JWT_SECRET_BYTES:
+            raise ValueError(
+                f"JWT_SECRET must be at least {MIN_JWT_SECRET_BYTES} bytes; generate one with "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
         return value
 
     @field_validator("smartcattle_ai_url", "ai_api_key", "database_url", "jwt_secret", mode="before")
