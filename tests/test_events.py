@@ -128,3 +128,31 @@ def test_received_at_comes_from_the_injected_clock(client, event_payload):
     created = client.post("/api/ai/events", json=event_payload).json()
     assert created["received_at"] == "2026-10-27T12:00:00Z"
     assert client.get("/api/events").json()["items"][0]["received_at"] == "2026-10-27T12:00:00Z"
+
+
+@pytest.mark.parametrize("confidence,expected", [
+    (1.0, "high"),
+    (0.95, "high"),
+    (0.9, "high"),      # the boundary is inclusive
+    (0.89, "medium"),
+    (0.6, "medium"),    # and this one is too
+    (0.59, "low"),
+    (0.0, "low"),
+])
+def test_the_level_follows_the_confidence(client, event_payload, confidence, expected):
+    body = client.post("/api/ai/events", json=event_payload | {"confidence": confidence}).json()
+    assert body["level"] == expected
+
+
+def test_the_level_is_not_accepted_from_the_caller(client, event_payload):
+    # The AI service reports what it saw and how sure it is; how urgent that
+    # makes it is a decision about this farm. Accepting it would let two
+    # services rank the same events by different rules.
+    response = client.post("/api/ai/events", json=event_payload | {"level": "low"})
+    assert response.status_code == 422
+
+
+def test_the_level_survives_the_listing(client, event_payload):
+    created = client.post("/api/ai/events", json=event_payload | {"confidence": 0.95}).json()
+    listed = client.get("/api/events").json()["items"][0]
+    assert listed["level"] == created["level"] == "high"
