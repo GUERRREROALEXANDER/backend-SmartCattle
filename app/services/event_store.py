@@ -114,15 +114,21 @@ def _to_event(row: EventRow, camera: str) -> Event:
     )
 
 
-def _level(stored: str | None, confidence: float) -> EventLevel:
-    """The stored severity, or a derived one when another service left it NULL."""
-    if stored is None:
-        return level_for_confidence(confidence)
+def _level(stored: str, confidence: float) -> EventLevel:
+    """The stored severity, or a derived one for a value this API does not model.
+
+    events.level is NOT NULL DEFAULT 'medium' in the shared schema, so there is
+    always a value; it may be the default rather than a considered one. It is
+    returned as stored either way, because the default and a genuine 'medium'
+    cannot be told apart and recomputing would rewrite history.
+
+    A value outside the CHECK can only come from a database predating that
+    constraint. It is derived rather than raised, so one odd row does not take
+    down the whole feed -- the same rule the nullability filter follows.
+    """
     try:
         return EventLevel(stored)
     except ValueError:
-        # A value outside the CHECK, which only a database predating it could
-        # hold. Derive rather than fail the whole listing.
         return level_for_confidence(confidence)
 
 

@@ -136,13 +136,16 @@ def foreign_event(connection, camera: str, **columns) -> None:
     connection.execute(text("INSERT INTO cameras (name) VALUES (:name)"), {"name": camera})
     camera_id = connection.execute(text("SELECT id FROM cameras WHERE name = :name"), {"name": camera}).scalar_one()
     values = {
-        "type": "cattle_out_of_zone", "camera_id": camera_id, "detected_object": "cow",
-        "confidence": 0.9, "detected_at": "2026-10-27 12:00:00+00:00",
+        "type": "cattle_out_of_zone", "level": "medium", "camera_id": camera_id,
+        "detected_object": "cow", "confidence": 0.9,
+        "detected_at": "2026-10-27 12:00:00+00:00",
         "received_at": "2026-10-27 12:00:01+00:00", "ai_event_id": str(uuid4()),
     } | columns
     connection.execute(text(
-        "INSERT INTO events (type, camera_id, detected_object, confidence, detected_at, received_at, ai_event_id)"
-        " VALUES (:type, :camera_id, :detected_object, :confidence, :detected_at, :received_at, :ai_event_id)"
+        "INSERT INTO events (type, level, camera_id, detected_object, confidence,"
+        " detected_at, received_at, ai_event_id)"
+        " VALUES (:type, :level, :camera_id, :detected_object, :confidence,"
+        " :detected_at, :received_at, :ai_event_id)"
     ), values)
 
 
@@ -239,3 +242,39 @@ def test_memory_mode_has_no_engine_to_dispose():
     with TestClient(app) as client:
         assert client.get("/api/status").json()["storage"] == "memory"
     assert app.state.engine is None
+
+
+def test_a_stored_level_is_not_recomputed(tmp_path, engine_for):
+    """A level another service wrote is read as stored, not derived again.
+
+    A row written before this backend populated the column carries 'medium'
+    from the schema default, which cannot be told apart from a genuine medium.
+    Recomputing on read would silently rewrite that history.
+    """
+    url = f"sqlite:///{(tmp_path / 'levels.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    with engine_for(url).begin() as connection:
+        # confidence 0.95 would derive 'high'; the row says 'low'.
+        foreign_event(connection, "camera-lvl", level="low", confidence=0.95)
+
+    with TestClient(create_app(database_settings(url))) as client:
+        listed = client.get("/api/events").json()["items"]
+        assert len(listed) == 1
+        assert listed[0]["level"] == "low"
+
+
+def test_an_unmodelled_level_is_derived(tmp_path, engine_for):
+    """A level outside the CHECK is derived instead of failing the feed.
+
+    Only a database predating that constraint can hold one, which is exactly
+    the kind of row that should not blank the events page.
+    """
+    url = f"sqlite:///{(tmp_path / 'odd-levels.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    with engine_for(url).begin() as connection:
+        foreign_event(connection, "camera-odd", level="urgentisimo", confidence=0.95)
+
+    with TestClient(create_app(database_settings(url))) as client:
+        listed = client.get("/api/events").json()["items"]
+        assert len(listed) == 1
+        assert listed[0]["level"] == "high"

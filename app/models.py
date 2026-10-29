@@ -49,9 +49,9 @@ class EventRow(Base):
     # The API event id. Other services may write events without one; those are not listed.
     ai_event_id: Mapped[UUID | None] = mapped_column(Uuid, unique=True)
     event_type: Mapped[str] = mapped_column("type", Text)
-    # Nullable here even though the shared schema defaults it: another service
-    # may insert without it, and the backend derives one when reading.
-    level: Mapped[str | None] = mapped_column(Text)
+    # NOT NULL DEFAULT 'medium' in the shared schema, so a row always has one;
+    # it may be the default rather than a considered value.
+    level: Mapped[str] = mapped_column(Text, server_default="medium")
     camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
     detected_object: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
