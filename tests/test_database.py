@@ -6,35 +6,13 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import inspect, text
 
 from app.core.config import Settings
-from app.db import create_db_engine
 from app.main import create_app
 from tests.conftest import TEST_JWT_SECRET
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture
-def engine_for():
-    """Opens engines and disposes them when the test ends.
-
-    pyproject turns warnings into errors, and an engine left open emits
-    ResourceWarning: unclosed database once the garbage collector reaches it.
-    That surfaced on CI, where collection happens at a different moment than
-    it does locally.
-    """
-    opened = []
-
-    def open_engine(url: str) -> Engine:
-        engine = create_db_engine(url)
-        opened.append(engine)
-        return engine
-
-    yield open_engine
-    for engine in opened:
-        engine.dispose()
 
 
 def alembic_config(url: str) -> Config:

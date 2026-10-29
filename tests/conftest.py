@@ -1,8 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine
 
 from app.core import security
 from app.core.config import Settings
+from app.db import create_db_engine
 from app.main import create_app
 
 
@@ -155,3 +157,24 @@ def secured_auth_client(settings):
     )
     with TestClient(create_app(configured)) as client:
         yield client
+
+
+@pytest.fixture
+def engine_for():
+    """Opens engines and disposes them when the test ends.
+
+    pyproject turns warnings into errors, and an engine left open emits
+    ResourceWarning: unclosed database once the garbage collector reaches it.
+    That surfaced on CI, where collection happens at a different moment than
+    it does locally.
+    """
+    opened = []
+
+    def open_engine(url: str) -> Engine:
+        engine = create_db_engine(url)
+        opened.append(engine)
+        return engine
+
+    yield open_engine
+    for engine in opened:
+        engine.dispose()

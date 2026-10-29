@@ -47,7 +47,7 @@ def test_a_short_secret_is_refused():
 def test_the_refusal_says_how_to_generate_one():
     # Otherwise the realistic response is lengthening a memorable string until
     # the message goes away.
-    with pytest.raises(ValidationError, match="secrets.token_urlsafe"):
+    with pytest.raises(ValidationError, match=r"secrets\.token_urlsafe"):
         settings(jwt_secret="too-short")
 
 
