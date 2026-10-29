@@ -17,7 +17,6 @@ from app.schemas.video_analysis import (
     VideoAnalysisCreate,
 )
 
-
 # Module-level aliases: inside these classes `list` is the method name, so a
 # bare `list[...]` annotation would read as a subscript of that method.
 Analyses = list[VideoAnalysis]
