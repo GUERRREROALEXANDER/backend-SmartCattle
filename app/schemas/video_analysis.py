@@ -1,10 +1,10 @@
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
-class VideoAlertClass(str, Enum):
+class VideoAlertClass(StrEnum):
     CATTLE = "cattle"
     PERSON = "person"
 

@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
-class CameraStatus(str, Enum):
+class CameraStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
     ERROR = "error"

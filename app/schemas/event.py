@@ -1,11 +1,11 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     CATTLE_OUT_OF_ZONE = "cattle_out_of_zone"
 
 
