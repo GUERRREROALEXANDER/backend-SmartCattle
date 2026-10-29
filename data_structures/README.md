@@ -37,12 +37,53 @@ event review moves backwards, and the camera carousel has no end.
 - **Key operations:** `enqueue`, `dequeue`, `peek`, `is_empty`, `size`.
 - **Implementation:** `collections.deque` provides O(1) `popleft()`, whereas `list.pop(0)` takes O(n) because the remaining items shift.
 
-### Linked list
+### Singly linked list
 
 - **Principle:** Nodes holding data and a reference to the next node.
 - **SmartCattle use:** Demonstrating dynamic storage and sequential traversal of events.
 - **Key operations:** `insert`, `traverse`, `search`, `delete`, `count`.
 - **Implementation:** Production Python code would use `list` or `deque`; explicit nodes serve as a teaching example here.
+- **Limit:** One link means one direction. Stepping back costs a traversal
+  from the head, and removing a node requires finding its predecessor first --
+  even when the node is already in hand.
+
+### Doubly linked list
+
+- **Principle:** Each node links to both neighbours (`prev` and `next`); the
+  list holds `head` and `tail`.
+- **SmartCattle use:** The event history an operator reviews. Reading the
+  night's alerts moves forward and back.
+- **Key operations:** `append`, `prepend`, `unlink`, `remove`, `find`,
+  `forward`, `backward`.
+- **Why the second link:** two reasons, and the second is the practical one.
+  `backward()` walks from the tail as far as the caller reads, instead of
+  building the forward list and reversing it. And `unlink()` removes a node
+  already held in O(1) -- four pointer assignments, no search -- which is
+  exactly what dismissing the alert on screen is.
+- **Where it breaks if written carelessly:** a node at either end has no
+  neighbour to update, so the list's own `head` or `tail` has to move. Miss
+  that and the list points at a removed node.
+
+### Doubly circular list
+
+- **Principle:** A doubly linked list closed into a ring: the last node's
+  `next` is the first, and the first node's `prev` is the last. There is no
+  head and no tail -- only a cursor.
+- **SmartCattle use:** The camera rotation in the live view. After the last
+  camera comes the first; stepping back from the first shows the last.
+- **Key operations:** `add`, `advance`, `rewind`, `peek`, `remove`, `find`,
+  `lap`, `next_active`.
+- **Why a ring rather than a list and an index:** no wrap-around arithmetic,
+  so there is no `% len` to get wrong -- and the backward direction is where
+  that happens, since `(index - 1) % n` is easy to mistype. No special case at
+  the ends, because every node has a real `prev` and `next`. And removing a
+  retired camera keeps every other node's identity, where a list shifts
+  everything after it and silently changes which camera the operator is
+  watching.
+- **The cost, stated plainly:** **no traversal terminates by itself.** A
+  `while current is not None` loop over a ring never ends. Every walk here
+  stops by counting, including `next_active()`, which returns `None` rather
+  than searching forever when every camera is switched off.
 
 Run each file from the repository root:
 
