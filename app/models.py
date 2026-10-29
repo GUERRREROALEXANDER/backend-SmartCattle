@@ -84,6 +84,31 @@ class UserRow(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AnimalRow(Base):
+    """The shared animals table.
+
+    No numeric id: the ear tag is the primary key. It is the real identity of
+    the animal -- the one physically on its ear and the one the staff use --
+    and a second identifier would mean translating between the two on every
+    query. The price is that a natural key changes, which is why
+    events.animal_tag carries ON UPDATE CASCADE.
+    """
+
+    __tablename__ = "animals"
+
+    tag: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, server_default="active")
+    camera_id: Mapped[int | None] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"),
+    )
+    name: Mapped[str | None] = mapped_column(Text)
+    # Written by the AI service when it recognises an individual animal, which
+    # it cannot do yet.
+    last_detection: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class VideoAnalysisRow(Base):
     __tablename__ = "video_analyses"
 
