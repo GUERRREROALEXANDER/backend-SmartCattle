@@ -90,6 +90,8 @@ Run each file from the repository root:
 | File | Command |
 |---|---|
 | `array_smartcattle.py` | `python data_structures/array_smartcattle.py` |
+| `doubly_linked_list_smartcattle.py` | `python data_structures/doubly_linked_list_smartcattle.py` |
+| `circular_list_smartcattle.py` | `python data_structures/circular_list_smartcattle.py` |
 | `stack_smartcattle.py` | `python data_structures/stack_smartcattle.py` |
 | `queue_smartcattle.py` | `python data_structures/queue_smartcattle.py` |
 | `linked_list_smartcattle.py` | `python data_structures/linked_list_smartcattle.py` |
