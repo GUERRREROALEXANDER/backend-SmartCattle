@@ -11,6 +11,7 @@ from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.db import SessionFactory
 from app.models import AnimalRow, CameraRow
@@ -193,8 +194,9 @@ class SqlAnimalStore:
             return _to_animal(row, camera_name)
 
     @staticmethod
-    def _camera_name(session: object, row: AnimalRow) -> str | None:
+    def _camera_name(session: Session, row: AnimalRow) -> str | None:
+        """The camera's API name, which is what camera_id means in the API."""
         if row.camera_id is None:
             return None
-        camera = session.get(CameraRow, row.camera_id)  # type: ignore[attr-defined]
+        camera = session.get(CameraRow, row.camera_id)
         return None if camera is None else camera.name
