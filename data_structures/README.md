@@ -10,7 +10,13 @@ not backend UUIDs. The event records are simplified examples, not API payloads.
 | List/Array | Indexed access and traversal | Currently detected animals |
 | Stack | LIFO | Recent event history |
 | Queue | FIFO | Pending events |
-| Linked list | Linked nodes | Event sequence |
+| Singly linked list | Nodes with one link | Event sequence |
+| **Doubly linked list** | Nodes with two links | Event history reviewed in both directions |
+| **Doubly circular list** | A ring with two links | Camera rotation in the live view |
+
+The last two are not variations for their own sake. Each exists because a
+specific SmartCattle screen needs something the single link cannot do: the
+event review moves backwards, and the camera carousel has no end.
 
 ### List/Array
 
