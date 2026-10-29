@@ -1,24 +1,15 @@
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path
 
 from app.core.config import Settings
-from app.routes.events import verify_api_key
-from app.routes.health import get_app_settings
+from app.dependencies import Clock, get_app_settings, get_camera_store, get_clock, verify_api_key
 from app.schemas.camera import Camera, CameraList, CameraRecord, CameraStatusReport, effective_status
 from app.services.camera_store import CameraStore
 
 router = APIRouter(tags=["cameras"])
 CameraId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
-
-
-def get_camera_store(request: Request) -> CameraStore:
-    return request.app.state.camera_store
-
-
-def get_clock(request: Request):
-    return request.app.state.clock
 
 
 def _camera(record: CameraRecord, now: datetime, settings: Settings) -> Camera:
@@ -30,7 +21,7 @@ def _camera(record: CameraRecord, now: datetime, settings: Settings) -> Camera:
 def list_cameras(
     store: CameraStore = Depends(get_camera_store),
     settings: Settings = Depends(get_app_settings),
-    clock=Depends(get_clock),
+    clock: Clock = Depends(get_clock),
 ) -> CameraList:
     now = clock()
     items = [_camera(record, now, settings) for record in store.list()]

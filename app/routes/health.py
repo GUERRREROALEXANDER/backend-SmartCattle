@@ -1,14 +1,11 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from app import __version__
 from app.core.config import Settings
+from app.dependencies import get_app_settings
 from app.schemas.status import AIServiceStatus, HealthResponse, StatusResponse, WelcomeResponse
 
 router = APIRouter(tags=["health"])
-
-
-def get_app_settings(request: Request) -> Settings:
-    return request.app.state.settings
 
 
 @router.get("/", response_model=WelcomeResponse)

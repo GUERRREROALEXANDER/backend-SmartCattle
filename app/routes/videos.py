@@ -1,9 +1,9 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.routes.events import get_event_store
+from app.dependencies import Clock, get_clock, get_event_store, get_video_analysis_store
 from app.schemas.event import AIEventCreate, EventType
 from app.schemas.video_analysis import (
     VideoAlertClass,
@@ -18,20 +18,12 @@ router = APIRouter(prefix="/api/videos", tags=["videos"])
 VIDEO_CAMERA_ID = "video-upload"
 
 
-def get_video_analysis_store(request: Request) -> VideoAnalysisStore:
-    return request.app.state.video_analysis_store
-
-
-def get_clock(request: Request):
-    return request.app.state.clock
-
-
 @router.post("/analyses", response_model=VideoAnalysis, status_code=201)
 def create_video_analysis(
     data: VideoAnalysisCreate,
     store: VideoAnalysisStore = Depends(get_video_analysis_store),
     event_store: EventStore = Depends(get_event_store),
-    clock=Depends(get_clock),
+    clock: Clock = Depends(get_clock),
 ) -> VideoAnalysis:
     created_at = clock()
     analysis = store.add(data, created_at)

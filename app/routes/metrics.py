@@ -3,8 +3,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends
 from pydantic import AwareDatetime
 
-from app.routes.events import get_event_store
-from app.routes.videos import get_clock, get_video_analysis_store
+from app.dependencies import Clock, get_clock, get_event_store, get_video_analysis_store
 from app.schemas.metrics import MetricsSummary
 from app.schemas.video_analysis import VideoAlertClass
 from app.services.event_store import EventStore
@@ -18,7 +17,7 @@ def metrics_summary(
     since: AwareDatetime | None = None,
     event_store: EventStore = Depends(get_event_store),
     analysis_store: VideoAnalysisStore = Depends(get_video_analysis_store),
-    clock=Depends(get_clock),
+    clock: Clock = Depends(get_clock),
 ) -> MetricsSummary:
     now = clock().astimezone(UTC)
     hour_start = now - timedelta(hours=1)
