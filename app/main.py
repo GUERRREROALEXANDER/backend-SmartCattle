@@ -54,7 +54,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(metrics.router)
 
     @app.exception_handler(RequestValidationError)
-    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Starlette passes the request positionally; the handlers do not read it.
+    async def handle_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
         detail = []
         for error in exc.errors():
             item = {
@@ -72,7 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": detail})
 
     @app.exception_handler(Exception)
-    async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    async def handle_unexpected_error(_request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled application error", exc_info=exc)
         return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
