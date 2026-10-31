@@ -14,6 +14,7 @@ from app.dependencies import (
     require_jwt_secret,
 )
 from app.schemas.auth import LoginRequest, TokenResponse, User, UserCreate, UserRole
+from app.schemas.user import PasswordChange
 from app.services.login_throttle import LoginThrottle
 from app.services.user_store import EmailAlreadyRegisteredError, StoredUser, UserStore
 
@@ -49,7 +50,7 @@ def register(
 
     The first account registered becomes the owner, because somebody has to be
     and there is no other channel to grant it. Every account after it is a
-    worker; promoting one is not an API operation yet.
+    worker; an owner promotes one through PATCH /api/users/{id}.
     """
     role = UserRole.OWNER if store.count() == 0 else UserRole.WORKER
     try:
@@ -103,3 +104,38 @@ def login(
 @router.get("/me", response_model=User)
 def me(user: CurrentUser) -> User:
     return User(**user.model_dump(exclude={"password_hash"}))
+
+
+@router.put("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    data: PasswordChange,
+    user: CurrentUser,
+    store: UserStore = Depends(get_user_store),
+    throttle: LoginThrottle = Depends(get_login_throttle),
+    clock: Clock = Depends(get_clock),
+) -> None:
+    """Replaces the caller's password after checking the current one.
+
+    Throttled with the same counter as login: whoever holds a stolen token
+    must not be able to guess the current password at full speed and then
+    lock the owner out by changing it.
+
+    400 and not 401 for a wrong current password: the token is valid, and a
+    401 would make the frontend sign the user out.
+
+    Tokens issued before the change stay valid until they expire; there is no
+    revocation list yet (see AUTHENTICATION.md).
+    """
+    now = clock()
+    retry_after = throttle.locked_for(user.email, now)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if not throttle.verify(data.current_password, user.password_hash):
+        throttle.record_failure(user.email, now)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The current password is not correct")
+    throttle.clear(user.email)
+    store.set_password(user.id, data.new_password, now)
