@@ -1,0 +1,74 @@
+# The whole backend on one machine: docker compose up --build
+#
+#   API        http://localhost:8000/docs
+#   MinIO      http://localhost:9001  (console; user/password below)
+#   PostgreSQL localhost:5432          (smartcattle / smartcattle)
+#
+# Development credentials only. Production uses Render, Neon and Cloudflare R2;
+# see docs/DEPLOYMENT.md.
+name: smartcattle
+
+x-storage: &storage
+  # The API reaches MinIO by its service name; browsers and the AI worker on
+  # the host reach it through the published port. URLs are signed for the latter.
+  VIDEO_STORAGE_ENDPOINT: http://minio:9000
+  VIDEO_STORAGE_PUBLIC_ENDPOINT: http://localhost:9000
+  VIDEO_STORAGE_BUCKET: smartcattle-videos
+  VIDEO_STORAGE_ACCESS_KEY_ID: smartcattle
+  VIDEO_STORAGE_SECRET_ACCESS_KEY: smartcattle-dev-secret
+  VIDEO_STORAGE_REGION: us-east-1
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: smartcattle
+      POSTGRES_PASSWORD: smartcattle
+      POSTGRES_DB: smartcattle
+    ports: ["5432:5432"]
+    volumes: [db-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartcattle -d smartcattle"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    # Pinned: MinIO's community images are no longer updated, so "latest"
+    # could change meaning or vanish.
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: smartcattle
+      MINIO_ROOT_PASSWORD: smartcattle-dev-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio-data:/data]
+
+  bucket:
+    # Runs once: creates the bucket with the API image, then exits.
+    build: .
+    command: ["python", "-m", "scripts.create_video_bucket"]
+    environment: *storage
+    volumes: ["./scripts:/app/scripts:ro"]
+    depends_on: [minio]
+    restart: "no"
+
+  api:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      <<: *storage
+      DATABASE_URL: postgresql://smartcattle:smartcattle@db:5432/smartcattle
+      # Development values. Never reuse them anywhere reachable.
+      JWT_SECRET: local-development-secret-not-for-production-use
+      AI_API_KEY: local-ai-key
+      ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://localhost:3000
+    depends_on:
+      db:
+        condition: service_healthy
+      bucket:
+        condition: service_completed_successfully
+
+volumes:
+  db-data:
+  minio-data:

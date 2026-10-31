@@ -1,0 +1,9 @@
+# Only app/, migrations/, alembic.ini and requirements.txt go into the image.
+# Everything else is excluded so secrets and local state never end up in a layer.
+*
+!app/
+!migrations/
+!alembic.ini
+!requirements.txt
+**/__pycache__
+**/*.py[cod]
