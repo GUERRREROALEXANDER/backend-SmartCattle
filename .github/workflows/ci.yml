@@ -49,7 +49,7 @@ jobs:
 
   container:
     # Builds the image and runs the whole stack from docker-compose.yml:
-    # PostgreSQL, MinIO and the API. The smoke test uploads through a real
+    # PostgreSQL, the S3 stand-in and the API. The smoke test uploads through a real
     # presigned URL and plays the AI worker, which unit tests cannot do.
     runs-on: ubuntu-latest
     steps:
