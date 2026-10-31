@@ -1,48 +1,44 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.routes.events import get_event_store
-from app.schemas.event import AIEventCreate, EventType
-from app.schemas.video_analysis import (
-    VideoAlertClass,
-    VideoAnalysis,
-    VideoAnalysisCreate,
-    VideoAnalysisList,
+from app.dependencies import (
+    Clock,
+    current_user,
+    get_clock,
+    get_event_store,
+    get_video_analysis_store,
 )
+from app.schemas.video_analysis import VideoAnalysis, VideoAnalysisCreate, VideoAnalysisList
 from app.services.event_store import EventStore
+from app.services.video_analysis_recording import record_analysis
 from app.services.video_analysis_store import VideoAnalysisStore
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
-VIDEO_CAMERA_ID = "video-upload"
 
 
-def get_video_analysis_store(request: Request) -> VideoAnalysisStore:
-    return request.app.state.video_analysis_store
-
-
-def get_clock(request: Request):
-    return request.app.state.clock
-
-
-@router.post("/analyses", response_model=VideoAnalysis, status_code=201)
+@router.post(
+    "/analyses", response_model=VideoAnalysis, status_code=201,
+    # Declared on the route rather than as a parameter: the handler does not
+    # read the user, it only requires that there is one.
+    dependencies=[Depends(current_user)],
+)
 def create_video_analysis(
     data: VideoAnalysisCreate,
     store: VideoAnalysisStore = Depends(get_video_analysis_store),
     event_store: EventStore = Depends(get_event_store),
-    clock=Depends(get_clock),
+    clock: Clock = Depends(get_clock),
 ) -> VideoAnalysis:
-    created_at = clock()
-    analysis = store.add(data, created_at)
-    for alert in data.alerts:
-        if alert.cls is VideoAlertClass.CATTLE:
-            # time_sec is relative to an unknown recording time, so the upload time is the event timestamp.
-            event_store.add(AIEventCreate(
-                event_type=EventType.CATTLE_OUT_OF_ZONE, camera_id=VIDEO_CAMERA_ID,
-                detected_object="cow", confidence=data.avg_confidence, timestamp=created_at,
-            ))
-    return analysis
+    """Stores a video analysis and logs an event for each cattle alert.
+
+    Requires a signed-in user, not the AI key. This endpoint is called by the
+    browser, and AI_API_KEY cannot live in a browser bundle -- the frontend's
+    own .env.example says so. Until this was protected, an unauthenticated
+    caller could write into the shared events feed through it, which is the one
+    path into that table that asked for nothing at all.
+    """
+    return record_analysis(data, store, event_store, clock())
 
 
 @router.get("/analyses", response_model=VideoAnalysisList)
