@@ -210,6 +210,24 @@ class SecurityAlertRow(Base):
     resolved_by: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="SET NULL"))
 
 
+class CameraOccupancyRow(Base):
+    """The latest head count per camera. One row each, overwritten.
+
+    History is deliberately not kept (ARCHITECTURE section 8): the AI counts
+    several times a second, and nobody reads yesterday's per-second counts.
+    """
+
+    __tablename__ = "camera_occupancy"
+
+    camera_id: Mapped[int] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="CASCADE"), primary_key=True,
+    )
+    cattle_inside: Mapped[int] = mapped_column(Integer)
+    cattle_outside: Mapped[int] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class VideoAnalysisRow(Base):
     __tablename__ = "video_analyses"
 
