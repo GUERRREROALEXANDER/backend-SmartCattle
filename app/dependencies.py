@@ -21,7 +21,9 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from app.core.config import Settings
 from app.core.security import decode_access_token
 from app.schemas.auth import UserRole
+from app.services.alert_store import AlertStore
 from app.services.animal_store import AnimalStore
+from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
 from app.services.event_store import EventStore
 from app.services.farm_store import FarmStore
@@ -75,6 +77,16 @@ def get_video_analysis_store(request: Request) -> VideoAnalysisStore:
 def get_zone_store(request: Request) -> ZoneStore:
     store: ZoneStore = request.app.state.zone_store
     return store
+
+
+def get_alert_store(request: Request) -> AlertStore:
+    store: AlertStore = request.app.state.alert_store
+    return store
+
+
+def get_broadcaster(request: Request) -> Broadcaster:
+    broadcaster: Broadcaster = request.app.state.broadcaster
+    return broadcaster
 
 
 def get_farm_store(request: Request) -> FarmStore:
@@ -142,16 +154,28 @@ def current_user(
     )
     if credentials is None or not credentials.credentials:
         raise unauthorized
-    claims = decode_access_token(credentials.credentials, secret=secret, now=clock())
-    if claims is None:
+    user = user_for_token(credentials.credentials, secret, store, clock())
+    if user is None:
         raise unauthorized
+    return user
+
+
+def user_for_token(token: str, secret: str, store: UserStore, now: datetime) -> StoredUser | None:
+    """The active account a token names, or None.
+
+    Shared by the HTTP dependency and the WebSocket handshake so the two
+    cannot drift into accepting different tokens.
+    """
+    claims = decode_access_token(token, secret=secret, now=now)
+    if claims is None:
+        return None
     try:
         user_id = int(claims["sub"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise unauthorized from error
+    except (KeyError, TypeError, ValueError):
+        return None
     user = store.by_id(user_id)
     if user is None or not user.is_active:
-        raise unauthorized
+        return None
     return user
 
 

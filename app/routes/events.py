@@ -1,37 +1,65 @@
-import secrets
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Security
-from fastapi.security import APIKeyHeader
+from fastapi import APIRouter, Depends, Query
 
-from app.core.config import Settings
-from app.routes.health import get_app_settings
-from app.schemas.event import AIEventCreate, Event, EventList
-from app.services.event_store import EventStore
+from app.dependencies import Clock, get_alert_store, get_broadcaster, get_clock, get_event_store, verify_api_key
+from app.schemas.event import AIEventCreate, Event, EventLevel, EventList, EventType
+from app.services.alert_store import AlertStore
+from app.services.broadcaster import Broadcaster
+from app.services.event_store import EventQuery, EventStore
 
 router = APIRouter(tags=["events"])
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-
-def get_event_store(request: Request) -> EventStore:
-    return request.app.state.event_store
-
-
-def verify_api_key(
-    settings: Settings = Depends(get_app_settings),
-    api_key: str | None = Security(api_key_header),
-) -> None:
-    if settings.ai_api_key is not None:
-        expected = settings.ai_api_key.get_secret_value()
-        if api_key is None or not secrets.compare_digest(api_key.encode("utf-8"), expected.encode("utf-8")):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+#: Default page size. The feed shows a screenful; 50 covers it without the
+#: client having to ask for a number.
+DEFAULT_LIMIT = 50
+#: Ceiling. The store keeps at most 1000 in memory, so a larger page could
+#: never be filled anyway, and an unbounded limit is a way to make the server
+#: serialise its whole history on request.
+MAX_LIMIT = 200
 
 
 @router.get("/api/events", response_model=EventList)
-def list_events(store: EventStore = Depends(get_event_store)) -> EventList:
-    items = store.list()
-    return EventList(items=items, total=len(items))
+def list_events(
+    camera_id: Annotated[str | None, Query(max_length=64)] = None,
+    level: EventLevel | None = None,
+    event_type: EventType | None = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    store: EventStore = Depends(get_event_store),
+) -> EventList:
+    """The event feed, newest received first.
+
+    `total` is the number of events matching the filters, not the number
+    returned, so a client can page without asking twice. Returning the page
+    length instead would make the last page look like the whole history.
+    """
+    query = EventQuery(
+        camera_id=camera_id, level=level, event_type=event_type, limit=limit, offset=offset,
+    )
+    page = store.page(query)
+    return EventList(items=page.items, total=page.total)
 
 
 @router.post("/api/ai/events", response_model=Event, status_code=201, dependencies=[Depends(verify_api_key)])
-def create_event(data: AIEventCreate, store: EventStore = Depends(get_event_store)) -> Event:
-    return store.add(data)
+def create_event(
+    data: AIEventCreate,
+    store: EventStore = Depends(get_event_store),
+    alerts: AlertStore = Depends(get_alert_store),
+    broadcaster: Broadcaster = Depends(get_broadcaster),
+    clock: Clock = Depends(get_clock),
+) -> Event:
+    """Stores a live detection, raises its security alert and pushes both to open dashboards.
+
+    The alert is raised here and not in the event store, because only this
+    endpoint carries live detections. Events derived from an uploaded video
+    (POST /api/videos/analyses) go into the same feed but describe recorded
+    footage; alerting on them would sound an alarm for something that already
+    happened.
+    """
+    now = clock()
+    event = store.add(data, now)
+    alert = alerts.raise_for(event, now)
+    broadcaster.publish("event.created", event, now)
+    broadcaster.publish("alert.created", alert, now)
+    return event
