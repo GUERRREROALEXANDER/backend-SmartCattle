@@ -98,3 +98,18 @@ class S3VideoStorage:
 
     def delete(self, key: str) -> None:
         self._internal.delete_object(Bucket=self._bucket, Key=key)
+
+    def ensure_bucket(self) -> bool:
+        """Creates the bucket when it is missing; True if it was created.
+
+        For local MinIO. R2 buckets are created in the Cloudflare dashboard,
+        where their CORS rules are set too.
+        """
+        try:
+            self._internal.head_bucket(Bucket=self._bucket)
+            return False
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in {"404", "NoSuchBucket", "NotFound"}:
+                raise
+        self._internal.create_bucket(Bucket=self._bucket)
+        return True
