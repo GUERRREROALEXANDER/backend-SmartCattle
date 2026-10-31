@@ -188,6 +188,11 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | POST | `/api/zones/camera/{camera_id}` | Configures a safe zone (**owner**) |
 | PATCH | `/api/zones/{id}` | Partial update (**owner**); the geometry is replaced as a whole |
 | DELETE | `/api/zones/{id}` | Removes a zone (**owner**) |
+| GET | `/api/alerts` | Security alerts, newest first (signed in). Filters `status`, `severity`, `camera_id`; paging `limit` (1–200) and `offset` |
+| GET | `/api/alerts/{id}` | One alert, or a JSON 404 (signed in) |
+| POST | `/api/alerts/{id}/acknowledge` | Open → acknowledged, recording who and when (signed in); 409 otherwise |
+| POST | `/api/alerts/{id}/resolve` | Open or acknowledged → resolved (signed in); 409 if already resolved |
+| WS | `/ws/live` | Live dashboard stream; see [Live stream](#live-stream) |
 | GET | `/api/farms` | Registered farms with their `lot_count` (signed in) |
 | POST | `/api/farms` | Registers a farm owned by the caller (**owner**); 409 if the caller already has one with that name |
 | GET | `/api/farms/{id}` | One farm, or a JSON 404 (signed in) |
@@ -220,6 +225,47 @@ Every cattle alert also creates a `cattle_out_of_zone` event with `camera_id: "v
 - Animal counts are null until an analysis exists. Otherwise, distinct cattle `track_id` values in the latest analysis estimate the outside count (capped at `max_cattle`), and the remainder is inside. They are not live individual-animal locations.
 - Alert counts use API-ingested event detection timestamps in UTC. `alerts_today` starts at 00:00 UTC; `alerts_since` is null without `since` and otherwise counts timestamps from `since` through the current time.
 - `detections_per_minute` is the number of stored API events in the trailing 60 minutes divided by 60. It is an event rate, not a per-frame YOLO detection rate. Future-dated events are excluded.
+
+### Live stream
+
+`/ws/live` pushes what happens on the farm to every open dashboard, so the
+frontend does not poll. Browsers cannot set headers on a WebSocket, and a token
+in the URL would end up in access logs, so the token goes in the first message:
+
+```js
+const socket = new WebSocket("wss://smartcattle-backend.onrender.com/ws/live");
+socket.onopen = () => socket.send(JSON.stringify({ type: "auth", token: accessToken }));
+socket.onmessage = ({ data }) => {
+  const { type, data: payload, sent_at } = JSON.parse(data);
+};
+```
+
+| Message `type` | `data` | Sent when |
+| --- | --- | --- |
+| `hello` | `{user_id, role}` | Authentication succeeded |
+| `event.created` | the `Event` | `POST /api/ai/events` stored a detection |
+| `alert.created` | the `Alert` | That detection raised a security alert |
+| `alert.updated` | the `Alert` | Someone acknowledged or resolved an alert |
+| `camera.status` | the `Camera` | The AI service reported a camera's state |
+| `pong` | `null` | The client sent `{"type": "ping"}` |
+
+Close codes: `4401` when the first message is missing (5 s), malformed or
+carries an invalid token, or the account is deactivated; `4503` when
+`JWT_SECRET` is not configured. Reconnect with a fresh token after `4401`.
+
+A slow client loses its oldest queued messages (256 per connection) instead of
+slowing ingestion. Re-read `GET /api/alerts` after reconnecting to catch up.
+
+### Security alerts
+
+Every detection posted to `POST /api/ai/events` raises one open alert, with
+the event's severity. Alerts move `open → acknowledged → resolved`; an open
+alert can also be resolved directly, as when a false alarm is dismissed.
+Workers can handle alerts: that is the everyday job, not farm configuration.
+
+Events created by `POST /api/videos/analyses` raise no alert. They describe
+recorded footage, and an alarm for something that already happened would
+train people to ignore alarms.
 
 ### Event feed
 

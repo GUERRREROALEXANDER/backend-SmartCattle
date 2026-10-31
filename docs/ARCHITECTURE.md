@@ -268,3 +268,46 @@ lot layout silently.
 **Ordering by id.** Lists are ordered by creation, not by name. SQLite and
 PostgreSQL collate names differently, and the two store implementations must
 return the same order.
+
+## 11. Security alerts and the live stream
+
+Decided 2026-10-31 so the dashboard reacts to an escape without polling.
+
+**A backend-owned `security_alerts` table, not the shared `alerts`.** The
+shared table models outbound notifications: its CHECK only admits delivery
+channels (`email`, `whatsapp`, `telegram`, `sms`, `n8n`) and its statuses are
+delivery states. An incident someone acknowledges and resolves on a dashboard
+is a different record. When notifications are built, they will reference a
+security alert rather than replace it.
+
+**Raised by the ingestion route, not the event store.** Only
+`POST /api/ai/events` carries live detections. Video analyses write events into
+the same feed, but alerting on recorded footage would sound alarms for things
+that already happened.
+
+**Event and alert are two writes.** If the alert insert failed after the event
+committed, the event would exist without its alert. Event ingestion has no
+idempotency key today, so the AI's retry would also duplicate the event; both
+problems go away together when the AI starts sending its own event id.
+
+**Transitions are a table, checked under a row lock.** `TRANSITIONS` in
+`app/schemas/alert.py` is the whole state machine. The SQL store reads the row
+`FOR UPDATE`, so two people acknowledging the same alert get one success and
+one `409` rather than two successes.
+
+**One in-process broadcaster.** `app/services/broadcaster.py` fans messages
+out to each open WebSocket through a bounded queue. Handlers publish from
+FastAPI's worker threads, so delivery goes through `call_soon_threadsafe` onto
+the socket's event loop. A full queue drops its oldest message: a stalled
+browser tab must never slow down ingestion.
+
+It is per process. Render's free plan runs one worker, so every socket sees
+every message. Running several workers or instances needs a shared bus
+(Redis pub/sub or PostgreSQL `LISTEN/NOTIFY`) behind the same `publish` and
+`subscribe` interface; nothing outside that module would change.
+
+**The token goes in the first message.** Browsers cannot set an
+`Authorization` header on a WebSocket, and a token in the query string is
+written to access logs by every proxy in front of the API. The handshake uses
+the same `user_for_token` function as the HTTP dependency, so both accept
+exactly the same tokens.
