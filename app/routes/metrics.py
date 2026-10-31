@@ -3,10 +3,26 @@ from datetime import UTC, timedelta
 from fastapi import APIRouter, Depends
 from pydantic import AwareDatetime
 
-from app.dependencies import Clock, get_clock, get_event_store, get_video_analysis_store
+from app.core.config import Settings
+from app.dependencies import (
+    Clock,
+    CurrentUser,
+    get_alert_store,
+    get_app_settings,
+    get_camera_store,
+    get_clock,
+    get_event_store,
+    get_occupancy_store,
+    get_video_analysis_store,
+)
 from app.schemas.metrics import MetricsSummary
+from app.schemas.occupancy import LiveMetrics
 from app.schemas.video_analysis import VideoAlertClass
+from app.services.alert_store import AlertStore
+from app.services.camera_store import CameraStore
 from app.services.event_store import EventStore
+from app.services.live_metrics import compute_live_metrics
+from app.services.occupancy_store import OccupancyStore
 from app.services.video_analysis_store import VideoAnalysisStore
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
@@ -53,4 +69,32 @@ def metrics_summary(
         # is sixteen digits of precision the measurement does not have -- it
         # is a count of whole events over a fixed window.
         detections_per_minute=round(detections / 60, 3),
+    )
+
+
+@router.get("/live", response_model=LiveMetrics)
+def live_metrics(
+    _user: CurrentUser,
+    cameras: CameraStore = Depends(get_camera_store),
+    occupancy: OccupancyStore = Depends(get_occupancy_store),
+    alerts: AlertStore = Depends(get_alert_store),
+    events: EventStore = Depends(get_event_store),
+    settings: Settings = Depends(get_app_settings),
+    clock: Clock = Depends(get_clock),
+) -> LiveMetrics:
+    """What is happening now, from the stores rather than estimates.
+
+    Unlike /summary, the head counts here are the AI's live counts per camera,
+    not an inference from the latest uploaded video. Counts older than
+    CAMERA_OFFLINE_AFTER_SECONDS are left out and reported in stale_cameras, so
+    a camera that stopped reporting cannot freeze its last number on screen.
+
+    Behind authentication, unlike /summary: where the herd is right now is the
+    one number a thief would want.
+    """
+    now = clock().astimezone(UTC)
+    return compute_live_metrics(
+        cameras=cameras.list(), counts=occupancy.list(), open_alerts=alerts.count_open(),
+        events_last_hour=events.count_between(now - timedelta(hours=1), now),
+        now=now, offline_after_seconds=settings.camera_offline_after_seconds,
     )
