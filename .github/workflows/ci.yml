@@ -46,3 +46,39 @@ jobs:
           alembic downgrade base
         env:
           DATABASE_URL: sqlite:///ci-migrations.db
+
+  container:
+    # Builds the image and runs the whole stack from docker-compose.yml:
+    # PostgreSQL, MinIO and the API. The smoke test uploads through a real
+    # presigned URL and plays the AI worker, which unit tests cannot do.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Start the stack
+        # Not --wait: the one-shot bucket service exits by design, and an
+        # explicit health poll does not depend on how compose reads that.
+        run: |
+          docker compose up --build --detach api
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://localhost:8000/health && exit 0
+            sleep 3
+          done
+          exit 1
+
+      - name: Smoke test the video path
+        run: |
+          pip install httpx
+          python -m scripts.smoke_video_upload http://localhost:8000 local-ai-key
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
