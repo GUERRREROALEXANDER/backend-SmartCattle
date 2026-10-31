@@ -1,7 +1,7 @@
 # The whole backend on one machine: docker compose up --build
 #
 #   API        http://localhost:8000/docs
-#   MinIO      http://localhost:9001  (console; user/password below)
+#   Video S3   http://localhost:9000  (moto; in memory, emptied on restart)
 #   PostgreSQL localhost:5432          (smartcattle / smartcattle)
 #
 # Development credentials only. Production uses Render, Neon and Cloudflare R2;
@@ -9,9 +9,9 @@
 name: smartcattle
 
 x-storage: &storage
-  # The API reaches MinIO by its service name; browsers and the AI worker on
+  # The API reaches the storage by its service name; browsers and the AI worker on
   # the host reach it through the published port. URLs are signed for the latter.
-  VIDEO_STORAGE_ENDPOINT: http://minio:9000
+  VIDEO_STORAGE_ENDPOINT: http://object-storage:5000
   VIDEO_STORAGE_PUBLIC_ENDPOINT: http://localhost:9000
   VIDEO_STORAGE_BUCKET: smartcattle-videos
   VIDEO_STORAGE_ACCESS_KEY_ID: smartcattle
@@ -33,16 +33,15 @@ services:
       timeout: 3s
       retries: 30
 
-  minio:
-    # Pinned: MinIO's community images are no longer updated, so "latest"
-    # could change meaning or vanish.
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    command: server /data --console-address :9001
+  object-storage:
+    # An S3 stand-in for Cloudflare R2: same protocol, so the API runs the same
+    # code. Not MinIO: its images are no longer published on Docker Hub.
+    # Pinned to the version the smoke test was written against.
+    image: motoserver/moto:5.2.5
     environment:
-      MINIO_ROOT_USER: smartcattle
-      MINIO_ROOT_PASSWORD: smartcattle-dev-secret
-    ports: ["9000:9000", "9001:9001"]
-    volumes: [minio-data:/data]
+      # Path-style addressing for any host name, including this service's.
+      S3_IGNORE_SUBDOMAIN_BUCKETNAME: "true"
+    ports: ["9000:5000"]
 
   bucket:
     # Runs once: creates the bucket with the API image, then exits.
@@ -50,7 +49,7 @@ services:
     command: ["python", "-m", "scripts.create_video_bucket"]
     environment: *storage
     volumes: ["./scripts:/app/scripts:ro"]
-    depends_on: [minio]
+    depends_on: [object-storage]
     restart: "no"
 
   api:
@@ -71,4 +70,3 @@ services:
 
 volumes:
   db-data:
-  minio-data:
