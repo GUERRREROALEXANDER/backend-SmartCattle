@@ -24,6 +24,7 @@ from app.schemas.auth import UserRole
 from app.services.animal_store import AnimalStore
 from app.services.camera_store import CameraStore
 from app.services.event_store import EventStore
+from app.services.farm_store import FarmStore
 from app.services.login_throttle import LoginThrottle
 from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
@@ -73,6 +74,11 @@ def get_video_analysis_store(request: Request) -> VideoAnalysisStore:
 
 def get_zone_store(request: Request) -> ZoneStore:
     store: ZoneStore = request.app.state.zone_store
+    return store
+
+
+def get_farm_store(request: Request) -> FarmStore:
+    store: FarmStore = request.app.state.farm_store
     return store
 
 
