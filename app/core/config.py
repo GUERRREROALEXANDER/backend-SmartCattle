@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # needs a table, and what this blocks is a fast loop, not a patient one.
     max_login_attempts: int = Field(default=5, ge=3, le=50)
     login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
-    # S3-compatible bucket for uploaded videos (Cloudflare R2, MinIO). All four
+    # S3-compatible bucket for uploaded videos (Cloudflare R2; moto locally). All four
     # or none: unset means the upload endpoints answer 503, like auth does.
     video_storage_endpoint: AnyHttpUrl | None = None
     video_storage_bucket: str | None = None
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # R2 ignores the region but the signature needs one; "auto" is what it documents.
     video_storage_region: str = "auto"
     # The host browsers and the AI service reach, when it differs from the one
-    # the API uses -- MinIO in docker-compose is http://minio:9000 to the API
+    # the API uses -- storage in docker-compose is http://object-storage:5000 to the API
     # and http://localhost:9000 to the browser. The signature covers the host,
     # so URLs must be signed for the one that will be called.
     video_storage_public_endpoint: AnyHttpUrl | None = None
