@@ -390,3 +390,16 @@ def test_object_size_reads_the_bucket():
         with pytest.raises(Exception, match="AccessDenied"):
             storage.object_size("videos/forbidden.mp4")
         storage.delete("videos/a.mp4")
+
+
+def test_the_bucket_is_created_only_when_missing():
+    storage = s3_storage()
+    with Stubber(storage._internal) as stub:
+        stub.add_response("head_bucket", {}, {"Bucket": "videos"})
+        stub.add_client_error("head_bucket", service_error_code="404", http_status_code=404)
+        stub.add_response("create_bucket", {}, {"Bucket": "videos"})
+        stub.add_client_error("head_bucket", service_error_code="AccessDenied", http_status_code=403)
+        assert storage.ensure_bucket() is False
+        assert storage.ensure_bucket() is True
+        with pytest.raises(Exception, match="AccessDenied"):
+            storage.ensure_bucket()
