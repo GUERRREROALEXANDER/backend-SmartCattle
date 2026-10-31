@@ -14,7 +14,7 @@ from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
 from app.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
-from app.routes import animals, auth, cameras, events, farms, health, metrics, videos, zones
+from app.routes import animals, auth, cameras, events, farms, health, metrics, users, videos, zones
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
@@ -97,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(users.router)
     app.include_router(animals.router)
     app.include_router(events.router)
     app.include_router(cameras.router)
