@@ -182,6 +182,34 @@ class LotRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class SecurityAlertRow(Base):
+    """A dashboard incident raised from a live AI event.
+
+    Not the shared `alerts` table: that one models outbound notifications, and
+    its CHECK only admits delivery channels (email, whatsapp, ...). An incident
+    someone acknowledges and resolves on the dashboard is a different thing.
+    """
+
+    __tablename__ = "security_alerts"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    # The API event id. SET NULL: an event purged by another service must not
+    # take the incident history with it.
+    event_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("events.ai_event_id", ondelete="SET NULL"),
+    )
+    camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
+    alert_type: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="SET NULL"))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class VideoAnalysisRow(Base):
     __tablename__ = "video_analyses"
 
