@@ -13,7 +13,7 @@ docker compose up --build
 | What | Where |
 | --- | --- |
 | API and Swagger | http://localhost:8000/docs |
-| MinIO console (videos) | http://localhost:9001, user `smartcattle`, password `smartcattle-dev-secret` |
+| Video storage (S3, moto) | http://localhost:9000; kept in memory, so videos are gone after `docker compose down` or a restart |
 | PostgreSQL | `localhost:5432`, database, user and password `smartcattle` |
 
 Migrations run when the API container starts. The AI service on the same PC
