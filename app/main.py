@@ -22,6 +22,7 @@ from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
 from app.services.login_throttle import LoginThrottle
+from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
 from app.services.user_store import InMemoryUserStore, SqlUserStore
 from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
 from app.services.zone_store import InMemoryZoneStore, SqlZoneStore
@@ -62,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.zone_store = InMemoryZoneStore()
         app.state.farm_store = InMemoryFarmStore()
         app.state.alert_store = InMemoryAlertStore()
+        app.state.occupancy_store = InMemoryOccupancyStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -74,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.zone_store = SqlZoneStore(sessions)
         app.state.farm_store = SqlFarmStore(sessions)
         app.state.alert_store = SqlAlertStore(sessions)
+        app.state.occupancy_store = SqlOccupancyStore(sessions)
     app.state.broadcaster = Broadcaster()
     # Per process, not per worker: the lockout is best effort, and Render's
     # free plan runs one worker anyway.
