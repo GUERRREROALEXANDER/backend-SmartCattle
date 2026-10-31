@@ -213,6 +213,40 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/metrics/summary?since=<ISO>` | Event rates and latest-analysis animal estimates; `since` is optional and timezone-aware |
 | GET | `/api/metrics/live` | Live counters from the stores: cameras online, cattle inside/outside from the AI's current counts, open alerts, events in the last hour, `system_status` (signed in) |
 | PUT | `/api/ai/cameras/{camera_id}/occupancy` | AI head count for one camera plus optional normalised boxes (`X-API-Key`); 204. Counts are stored, boxes are only pushed live |
+| POST | `/api/videos/uploads` | Registers a video (≤ 1 GiB; mp4, mov, mkv, webm) and returns a presigned URL to upload it to (**signed in**); 413 too large, 415 wrong type |
+| POST | `/api/videos/uploads/{id}/complete` | Confirms the file is in the bucket and queues it (uploader or owner) |
+| GET | `/api/videos/uploads?status=&limit=&offset=` | Uploads newest first, with processing progress (**signed in**) |
+| GET | `/api/videos/uploads/{id}` | One upload (**signed in**) |
+| POST | `/api/ai/video-jobs/claim` | The AI worker takes the oldest queued video and gets a download URL (`X-API-Key`); 204 when there is nothing to do |
+| PUT | `/api/ai/video-jobs/{id}/progress` | Frames processed plus that frame's boxes; renews the job lease (`X-API-Key`) |
+| POST | `/api/ai/video-jobs/{id}/complete` | Delivers the analysis, same body as `POST /api/videos/analyses` (`X-API-Key`) |
+| POST | `/api/ai/video-jobs/{id}/fail` | Gives up on a video the worker cannot process (`X-API-Key`) |
+
+### Video uploads
+
+The file never passes through this API. The browser uploads it straight to
+the bucket (Cloudflare R2 in production, MinIO locally), which keeps a 1 GB
+upload off Render's request limits:
+
+```js
+const ticket = await api.post("/videos/uploads", {
+  file_name: file.name, size_bytes: file.size, content_type: file.type, lot_id,
+});
+await fetch(ticket.upload_url, { method: ticket.upload_method, headers: ticket.upload_headers, body: file });
+await api.post(`/videos/uploads/${ticket.upload.id}/complete`);
+```
+
+`fetch` reports no upload progress; use `XMLHttpRequest.upload.onprogress` for
+a progress bar. After `/complete` the status goes `queued` → `processing` →
+`completed` (with `analysis_id`) or `failed` (with `error`), and each change
+arrives as a `video.updated` message. The bucket's CORS rules must allow `PUT`
+from the frontend's origin.
+
+The AI worker polls `POST /api/ai/video-jobs/claim`, downloads from
+`download_url`, and sends progress at least every 10 minutes. A worker that
+goes quiet for longer loses the job to the next one; after 3 attempts the video
+is marked failed. Without `VIDEO_STORAGE_*` configured, these endpoints return
+503.
 
 ### Video analyses and metrics
 
@@ -251,6 +285,8 @@ socket.onmessage = ({ data }) => {
 | `camera.status` | the `Camera` | The AI service reported a camera's state |
 | `occupancy.updated` | `{camera_id, cattle_inside, cattle_outside, observed_at, received_at}` | The AI reported a newer head count |
 | `detections` | `{camera_id, observed_at, detections: [{track_id, label, confidence, bbox, inside_zone}]}` | That count carried boxes; `bbox` is `[x1, y1, x2, y2]` from 0 to 1, so the video overlay and the 3D view scale it to their own size and can flash `inside_zone: false` animals |
+| `video.updated` | the `VideoUpload` | An upload was queued, claimed, completed or failed |
+| `video.progress` | `{upload_id, frames_processed, frames_total, fps, video_time_sec, detections}` | The AI worker processed more of a video; `video_time_sec` places the boxes on the playback |
 | `pong` | `null` | The client sent `{"type": "ping"}` |
 
 Close codes: `4401` when the first message is missing (5 s), malformed or
