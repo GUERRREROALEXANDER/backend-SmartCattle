@@ -4,11 +4,12 @@ The only shared table this service both owns and writes. Unlike events and
 cameras, no other service writes here, so the columns can be required.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from app.core.security import hash_password
 from app.db import SessionFactory
 from app.models import UserRow
 from app.schemas.auth import User, UserCreate, UserRole
+from app.schemas.user import UserUpdate
 
 
 class EmailAlreadyRegisteredError(Exception):
@@ -23,6 +25,14 @@ class EmailAlreadyRegisteredError(Exception):
 
     Its own type rather than a bool return: the caller has to answer 409 and
     must not be able to confuse "taken" with "created".
+    """
+
+
+class LastOwnerError(Exception):
+    """Raised when an update would leave no active owner.
+
+    Nobody could then grant the role again through the API, and the farm's
+    configuration would be frozen until someone edited the database by hand.
     """
 
 
@@ -36,6 +46,20 @@ class StoredUser(User):
     password_hash: str
 
 
+@dataclass(frozen=True)
+class UserQuery:
+    role: UserRole | None = None
+    is_active: bool | None = None
+    limit: int = 50
+    offset: int = 0
+
+
+@dataclass(frozen=True)
+class UserPage:
+    items: list[StoredUser]
+    total: int
+
+
 class UserStore(Protocol):
     def create(self, data: UserCreate, role: UserRole, created_at: datetime) -> StoredUser: ...
 
@@ -46,6 +70,19 @@ class UserStore(Protocol):
     def record_login(self, user_id: int, when: datetime) -> None: ...
 
     def count(self) -> int: ...
+
+    def page(self, query: UserQuery) -> UserPage: ...
+
+    def update(self, user_id: int, data: UserUpdate, now: datetime) -> StoredUser | None: ...
+
+    def set_password(self, user_id: int, password: str, now: datetime) -> None: ...
+
+
+def _removes_an_owner(user: User, data: UserUpdate) -> bool:
+    """Whether the update takes an active owner out of that set."""
+    if user.role is not UserRole.OWNER or not user.is_active:
+        return False
+    return data.role is UserRole.WORKER or data.is_active is False
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -103,6 +140,37 @@ class InMemoryUserStore:
         with self._lock:
             return len(self._by_id)
 
+    def page(self, query: UserQuery) -> UserPage:
+        with self._lock:
+            matching = [
+                self._by_id[key] for key in sorted(self._by_id)
+                if (query.role is None or self._by_id[key].role is query.role)
+                and (query.is_active is None or self._by_id[key].is_active == query.is_active)
+            ]
+        return UserPage(items=matching[query.offset:query.offset + query.limit], total=len(matching))
+
+    # `now` stamps users.updated_at in SQL; a User model has no such field to set.
+    def update(self, user_id: int, data: UserUpdate, now: datetime) -> StoredUser | None:  # noqa: ARG002
+        with self._lock:
+            current = self._by_id.get(user_id)
+            if current is None:
+                return None
+            if _removes_an_owner(current, data) and not any(
+                user.id != user_id and user.role is UserRole.OWNER and user.is_active
+                for user in self._by_id.values()
+            ):
+                raise LastOwnerError(user_id)
+            updated = current.model_copy(update={field: getattr(data, field) for field in data.model_fields_set})
+            self._by_id[user_id] = updated
+            return updated
+
+    def set_password(self, user_id: int, password: str, now: datetime) -> None:  # noqa: ARG002
+        password_hash = hash_password(password)
+        with self._lock:
+            user = self._by_id.get(user_id)
+            if user is not None:
+                self._by_id[user_id] = user.model_copy(update={"password_hash": password_hash})
+
 
 def _to_user(row: UserRow) -> StoredUser:
     created_at = _aware(row.created_at)
@@ -156,9 +224,55 @@ class SqlUserStore:
         with self._sessions() as session:
             return self._count(session)
 
+    def page(self, query: UserQuery) -> UserPage:
+        conditions = []
+        if query.role is not None:
+            conditions.append(UserRow.role == query.role.value)
+        if query.is_active is not None:
+            conditions.append(UserRow.is_active.is_(query.is_active))
+        with self._sessions() as session:
+            total = session.scalar(select(func.count()).select_from(UserRow).where(*conditions)) or 0
+            rows = session.scalars(
+                select(UserRow).where(*conditions).order_by(UserRow.id).limit(query.limit).offset(query.offset)
+            )
+            return UserPage(items=[_to_user(row) for row in rows], total=int(total))
+
+    def update(self, user_id: int, data: UserUpdate, now: datetime) -> StoredUser | None:
+        with self._sessions.begin() as session:
+            row = session.get(UserRow, user_id, with_for_update=True)
+            if row is None:
+                return None
+            if _removes_an_owner(_to_user(row), data):
+                # Locks the other active owners as well. Two owners demoting
+                # each other at the same moment would otherwise each see the
+                # other still in place, and both updates would succeed.
+                other_owner = session.scalars(
+                    select(UserRow.id).where(
+                        UserRow.role == UserRole.OWNER.value, UserRow.is_active.is_(True), UserRow.id != user_id,
+                    ).limit(1).with_for_update()
+                ).first()
+                if other_owner is None:
+                    raise LastOwnerError(user_id)
+            if data.full_name is not None:
+                row.full_name = data.full_name
+            if data.role is not None:
+                row.role = data.role.value
+            if data.is_active is not None:
+                row.is_active = data.is_active
+            # PostgreSQL's trigger overwrites this; SQLite has no trigger.
+            row.updated_at = now
+            session.flush()
+            return _to_user(row)
+
+    def set_password(self, user_id: int, password: str, now: datetime) -> None:
+        password_hash = hash_password(password)
+        with self._sessions.begin() as session:
+            row = session.get(UserRow, user_id)
+            if row is not None:
+                row.password_hash = password_hash
+                row.updated_at = now
+
     @staticmethod
     def _count(session: Session) -> int:
-        from sqlalchemy import func
-
         total = session.scalar(select(func.count()).select_from(UserRow))
         return int(total or 0)

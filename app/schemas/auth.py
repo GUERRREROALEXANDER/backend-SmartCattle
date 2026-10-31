@@ -16,7 +16,7 @@ class UserRole(StrEnum):
     WORKER = "worker"
 
 
-def _check_password_bytes(value: str) -> str:
+def check_password_bytes(value: str) -> str:
     """bcrypt ignores everything past 72 bytes, so a longer password is rejected here.
 
     Measured in bytes and not characters: the farm staff write in Spanish, and
@@ -63,7 +63,7 @@ class UserCreate(BaseModel):
     @field_validator("password")
     @classmethod
     def password_fits_bcrypt(cls, value: str) -> str:
-        return _check_password_bytes(value)
+        return check_password_bytes(value)
 
 
 class LoginRequest(BaseModel):
