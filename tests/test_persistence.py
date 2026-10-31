@@ -133,6 +133,37 @@ def test_two_cameras_keep_their_own_zone_across_a_restart(tmp_path):
         ).json()["total"] == 1
 
 
+def test_alerts_and_their_handling_survive_a_restart(tmp_path, event_payload):
+    settings = migrated(tmp_path, "alerts.db")
+    with TestClient(create_app(settings)) as client:
+        sign_in(client)
+        event = client.post("/api/ai/events", json=event_payload).json()
+        client.post("/api/ai/events", json=event_payload | {"camera_id": "camera-02", "confidence": 0.5})
+        alerts = client.get("/api/alerts").json()
+        assert alerts["total"] == 2
+        linked = next(alert for alert in alerts["items"] if alert["camera_id"] == "camera-01")
+        assert linked["event_id"] == event["id"] and linked["severity"] == "high"
+        assert client.post(f"/api/alerts/{linked['id']}/acknowledge").json()["status"] == "acknowledged"
+        assert client.post(f"/api/alerts/{linked['id']}/acknowledge").status_code == 409
+
+    with TestClient(create_app(settings)) as client:
+        sign_in(client, "otra@finca.example")
+        stored = client.get(f"/api/alerts/{linked['id']}").json()
+        assert stored["status"] == "acknowledged" and stored["acknowledged_by"] == 1
+        assert client.post(f"/api/alerts/{linked['id']}/resolve").json()["resolved_by"] == 2
+
+        def total(**params):
+            return client.get("/api/alerts", params=params).json()["total"]
+
+        assert total(status="resolved") == 1
+        assert total(status="open", severity="low", camera_id="camera-02") == 1
+        assert total(camera_id="camera-03") == 0
+        assert client.get("/api/alerts/00000000-0000-4000-8000-000000000000").status_code == 404
+        assert client.get("/api/alerts", params={"limit": 1, "offset": 1}).json()["items"][0]["id"] in {
+            alert["id"] for alert in alerts["items"]
+        }
+
+
 def test_account_management_holds_against_the_database(tmp_path):
     settings = migrated(tmp_path, "accounts.db")
     with TestClient(create_app(settings)) as client:
