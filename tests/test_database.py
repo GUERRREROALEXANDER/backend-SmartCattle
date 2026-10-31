@@ -90,7 +90,9 @@ def test_sqlite_migrations_and_persistence(tmp_path, event_payload, video_analys
     # Only the backend-owned additions go; the shared tables and their rows stay.
     engine = engine_for(url)
     assert "stream_url" not in {column["name"] for column in inspect(engine).get_columns("cameras")}
-    backend_owned = {"video_analyses", "video_analysis_alerts", "farms", "lots", "security_alerts"}
+    backend_owned = {
+        "video_analyses", "video_analysis_alerts", "farms", "lots", "security_alerts", "camera_occupancy",
+    }
     assert not backend_owned & set(inspect(engine).get_table_names())
     with engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM events")).scalar_one() == 3
