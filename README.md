@@ -42,15 +42,22 @@ app/
   __init__.py
   main.py                  create_app(): picks SQL or memory stores
   db.py                    SQLAlchemy Base, engine and sessions
-  models.py                shared cameras/events and backend-owned video analysis tables
+  models.py                shared cameras/events/users/animals/zones and backend-owned video analysis tables
+  dependencies.py          every provider the routes resolve out of app.state
+  middleware.py            request id, access log
   core/config.py
+  core/security.py         password hashing and access tokens
   routes/health.py
+  routes/auth.py
   routes/animals.py
+  routes/zones.py
   routes/events.py
   routes/cameras.py
   routes/videos.py
   routes/metrics.py
+  schemas/auth.py
   schemas/animal.py
+  schemas/zone.py
   schemas/camera.py
   schemas/event.py
   schemas/video_analysis.py
@@ -150,17 +157,47 @@ Per-frame detections are not stored: the AI only sends relevant events. See [ARC
 
 ## Endpoints
 
+Endpoints marked **owner** need an account with that role; the ones marked
+signed in need any account. The `X-API-Key` ones are called by the AI service.
+See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
+[docs/ROLES.md](docs/ROLES.md).
+
 | Method | Path | Response |
 | --- | --- | --- |
 | GET | `/` | Service name, version, and docs path |
 | GET | `/health` | `{"status":"ok"}` deployment health check |
-| GET | `/api/status` | Version, AI configuration flag, and storage type (`memory` or `postgresql`) |
-| GET | `/api/animals` | Empty animal collection with total zero |
-| GET | `/api/events` | Stored events, most recently received first (at most 1000), and total |
+| GET | `/api/status` | Version, AI configuration flag, storage type (`memory` or `postgresql`), and whether authentication is configured |
+| GET | `/api/cameras/{camera_id}` | One camera's effective status, or a JSON 404 if it has never reported |
+| POST | `/api/auth/register` | Creates an account and returns a bearer token; the first account is the owner |
+| POST | `/api/auth/login` | Returns a bearer token for an existing account |
+| GET | `/api/auth/me` | The signed-in account |
+| GET | `/api/animals` | The herd, optionally filtered with `?status=active\|inactive\|lost` |
+| GET | `/api/animals/{tag}` | One animal, or a JSON 404 |
+| POST | `/api/animals` | Registers an animal (**owner**); 409 if the ear tag is taken |
+| PATCH | `/api/animals/{tag}` | Partial update (**owner**); omitted fields keep their values |
+| POST | `/api/animals/{tag}/deactivate` | Withdraws an animal from the active herd (**owner**). There is no DELETE |
+| PUT | `/api/animals/{tag}/detection` | AI service records a sighting (`X-API-Key`) |
+| GET | `/api/animals/{tag}/exists` | Whether a tag is taken, for the registration form (signed in) |
+| GET | `/api/zones` | Configured safe zones, optionally `?camera_id=` (signed in) |
+| GET | `/api/zones/{id}` | One zone, or a JSON 404 (signed in) |
+| POST | `/api/zones/camera/{camera_id}` | Configures a safe zone (**owner**) |
+| PATCH | `/api/zones/{id}` | Partial update (**owner**); the geometry is replaced as a whole |
+| DELETE | `/api/zones/{id}` | Removes a zone (**owner**) |
+| GET | `/api/farms` | Registered farms with their `lot_count` (signed in) |
+| POST | `/api/farms` | Registers a farm owned by the caller (**owner**); 409 if the caller already has one with that name |
+| GET | `/api/farms/{id}` | One farm, or a JSON 404 (signed in) |
+| PATCH | `/api/farms/{id}` | Partial update (**the farm's owner**); omitted fields keep their value, `null` clears an optional one |
+| DELETE | `/api/farms/{id}` | Deletes the farm (**the farm's owner**); 409 while it still has lots |
+| GET | `/api/farms/{id}/lots` | The farm's lots, optionally `?active=true\|false` (signed in) |
+| POST | `/api/farms/{id}/lots` | Adds a paddock, stable, pen or pasture (**the farm's owner**); 409 on a duplicate name in that farm |
+| GET | `/api/lots/{id}` | One lot, or a JSON 404 (signed in) |
+| PATCH | `/api/lots/{id}` | Partial update (**the farm's owner**) |
+| DELETE | `/api/lots/{id}` | Removes a lot (**the farm's owner**) |
+| GET | `/api/events` | Event feed, newest received first. Filters: `camera_id`, `level`, `event_type`; paging: `limit` (1–200, default 50) and `offset` |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
 | PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
-| POST | `/api/videos/analyses` | Stores a simulated video analysis; returns 201 with the analysis and alerts |
+| POST | `/api/videos/analyses` | Stores a simulated video analysis (**signed in**); returns 201 with the analysis and alerts |
 | GET | `/api/videos/analyses?limit=20` | Latest analyses first; `limit` defaults to 20 and accepts 1–100 |
 | GET | `/api/videos/analyses/{id}` | One analysis with its alerts, or a JSON 404 |
 | GET | `/api/metrics/summary?since=<ISO>` | Event rates and latest-analysis animal estimates; `since` is optional and timezone-aware |
@@ -178,6 +215,27 @@ Every cattle alert also creates a `cattle_out_of_zone` event with `camera_id: "v
 - Animal counts are null until an analysis exists. Otherwise, distinct cattle `track_id` values in the latest analysis estimate the outside count (capped at `max_cattle`), and the remainder is inside. They are not live individual-animal locations.
 - Alert counts use API-ingested event detection timestamps in UTC. `alerts_today` starts at 00:00 UTC; `alerts_since` is null without `since` and otherwise counts timestamps from `since` through the current time.
 - `detections_per_minute` is the number of stored API events in the trailing 60 minutes divided by 60. It is an event rate, not a per-frame YOLO detection rate. Future-dated events are excluded.
+
+### Event feed
+
+`GET /api/events` pages and filters. `total` is the number of events matching
+the filters, **not** the number returned, so a client can tell whether another
+page exists without asking twice:
+
+```
+GET /api/events?camera_id=camera-01&level=high&limit=20&offset=0
+```
+
+`level` is `low`, `medium` or `high`, derived by the backend from the
+detection confidence (at or above 0.9 is high, below 0.6 is low). It is **not
+accepted from the caller**: the AI service reports what it saw and how sure it
+is, and how urgent that makes it is a decision about this farm, so keeping it
+on one side of the boundary is what guarantees every event is ranked by the
+same rule.
+
+An offset past the end returns an empty `items` with the unchanged `total`.
+The store keeps at most 1000 events, so that is the ceiling on what any
+sequence of pages can reach.
 
 ### Camera status
 
@@ -204,9 +262,9 @@ Set `BACKEND_BASE_URL` in the frontend to `http://localhost:8000` for local deve
 | --- | --- |
 | `/` | `{"name":"SmartCattle Backend","version":"<version>","docs":"/docs"}` |
 | `/health` | `{"status":"ok"}` |
-| `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory"}` (`configured` may be `true`) |
-| `/api/animals` | `{"items":[],"total":0}` |
-| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
+| `/api/status` | `{"status":"ok","version":"<version>","ai_service":{"configured":false},"storage":"memory","auth_enabled":false}` (`configured` and `auth_enabled` may be `true`) |
+| `/api/animals` | `{"items":[{"tag":"A-441","name":"Lucera","status":"active","camera_id":"camera-01","last_detection":null,"created_at":"<UTC>","updated_at":"<UTC>"}],"total":1}` (empty: `{"items":[],"total":0}`) |
+| `/api/events` | `{"items":[{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z","bbox":[120.0,80.5,340.0,300.0],"id":"<uuid>","received_at":"2026-10-03T15:30:01Z","level":"high"}],"total":1}` (empty: `{"items":[],"total":0}`; `bbox` may be `null`) |
 | `/api/cameras` | `{"items":[{"id":"camera-01","reported_status":"online","status":"online","last_report_at":"<UTC>","last_online_at":"<UTC>","last_error":null,"frame_width":1280,"frame_height":720,"fps":14.8}],"total":1}` (no camera yet: `{"items":[],"total":0}`) |
 | `/api/videos/analyses` | `{"items":[{"id":"<uuid>","video_name":"pasture-test.mp4","duration_sec":12.5,"frames_analyzed":125,"max_cattle":4,"max_people":1,"alerts":[{"track_id":7,"cls":"cattle","time_sec":3.2,"id":1}],"avg_confidence":0.91,"outside_ratio":0.25,"alert_count":1,"created_at":"<UTC>"}],"total":1}` |
 | `/api/metrics/summary` | `{"animals_inside":3,"animals_outside":1,"alerts_today":2,"alerts_since":null,"detections_per_minute":0.03333333333333333}` (`since` adds an integer `alerts_since`; animal counts may be null) |
@@ -215,7 +273,14 @@ Validation errors (422) use `{"detail":[{"type":"<error type>","loc":["body","<f
 
 ## API documentation
 
-Open `/docs` for Swagger UI or `/redoc` for ReDoc. In `/docs`, use **Authorize** to supply `X-API-Key`. The event schema includes descriptions and a complete example.
+Open `/docs` for Swagger UI or `/redoc` for ReDoc. **Authorize** offers both
+schemes, and which one an endpoint needs is not interchangeable:
+
+- `HTTPBearer` — paste the `access_token` from `/api/auth/login`. For the herd,
+  the zones and saving a video analysis.
+- `APIKeyHeader` — `X-API-Key`, for the endpoints the AI service calls.
+
+The event schema includes descriptions and a complete example.
 
 ## Environment variables
 
@@ -228,6 +293,10 @@ Settings load from `.env` and the environment; environment variables take preced
 | `AI_API_KEY` | Empty | Optional shared key for event and camera status ingestion; empty means unset. Set it in production. |
 | `DATABASE_URL` | Empty | PostgreSQL URL. Empty means in-memory storage. Never exposed by any endpoint. |
 | `CAMERA_OFFLINE_AFTER_SECONDS` | `60` | A camera without a report for longer than this (10–3600) is shown as `offline`. |
+| `JWT_SECRET` | Empty | Signs the access tokens. **Empty means authentication is off:** `/api/auth/*` answers 503 and nothing is protected. Rejected below 32 bytes; changing it signs everyone out. |
+| `ACCESS_TOKEN_MINUTES` | `60` | Access token lifetime (5–1440). There is no refresh token, so this is the whole session. |
+| `MAX_LOGIN_ATTEMPTS` | `5` | Failed logins per address (3–50) before it is refused. Counted per process; a restart clears it. |
+| `LOGIN_LOCKOUT_SECONDS` | `300` | How long a locked address is refused (30–3600). |
 
 When `AI_API_KEY` is unset, ingestion is open for development. CORS allows GET, POST and PUT, accepts Content-Type and X-API-Key, and does not allow credentials. Status responses never expose the AI URL, key or database URL.
 
@@ -235,15 +304,39 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 
 ## Deploying on Render
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's
+`SMARTCATTLE_API_KEY` on the local PC. `JWT_SECRET` is generated too, so the
+deployment never starts with authentication off -- but note that replacing it
+by hand signs every user out, because tokens are verified against it and there
+is no session table. Each deploy runs `alembic upgrade head` before starting
+Uvicorn.
+
+The first account registered on a fresh deployment becomes the owner; see
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
 
 ## Tests
 
 ```sh
-python -m pytest -q
+ruff check .   # lint
+mypy           # strict type check on app/ and data_structures/
+pytest -q      # tests
 ```
 
-Tests cover endpoints, event/camera/video validation, video-to-event mapping, summary metric windows, shared-key protection, CORS, configuration, error handling, per-app isolation, the 1000-event storage limit, and Alembic migrations plus SQL persistence on a temporary SQLite database. To also run them against a real PostgreSQL database (use an empty test database, never the shared one: the first run applies `database/schema.sql`, and the test deletes the rows it creates):
+CI runs the same three on every push, plus an Alembic round trip against an
+empty database. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Tests cover endpoints, authentication and roles, password hashing and token
+handling, the login throttle, the herd and safe zone registries, event
+filtering and paging, event/camera/video validation, video-to-event mapping,
+summary metric windows, shared-key protection, the published OpenAPI contract,
+CORS, request correlation, configuration, error handling, per-app isolation,
+the 1000-event storage limit, the data structure examples, and Alembic
+migrations plus SQL persistence on a temporary SQLite database.
+
+The suite runs bcrypt at its minimum cost through an autouse fixture, because
+the work factor is the point in production and buys nothing in a test.
+`tests/test_security.py` pins the production value by reading the source, so
+lowering it here cannot hide a change to the real one. To also run them against a real PostgreSQL database (use an empty test database, never the shared one: the first run applies `database/schema.sql`, and the test deletes the rows it creates):
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql://USER:PASSWORD@localhost:5432/smartcattle_test"
@@ -273,7 +366,43 @@ curl -X POST http://localhost:8000/api/ai/events \
   -d '{"event_type":"cattle_out_of_zone","camera_id":"camera-01","detected_object":"cow","confidence":0.95,"timestamp":"2026-10-03T15:30:00Z"}'
 ```
 
-The backend assigns `id` and `received_at`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. The optional `bbox` is `[x1, y1, x2, y2]` in frame pixels: four finite numbers ≥ 0 with `x1 < x2` and `y1 < y2`. Extra fields and unknown event types are rejected.
+The backend assigns `id`, `received_at` and `level`. Detection timestamps must include a timezone. Camera and object names are trimmed and must contain 1–64 characters. Confidence must be a finite number between 0 and 1 inclusive. The optional `bbox` is `[x1, y1, x2, y2]` in frame pixels: four finite numbers ≥ 0 with `x1 < x2` and `y1 < y2`. Extra fields and unknown event types are rejected.
+
+**Do not send `level`.** The request is rejected if you do. The AI service
+reports what it saw and how sure it is; the backend derives the severity from
+the confidence, so every event on the farm is ranked by one rule rather than
+two.
+
+### Reporting an individual animal
+
+Once the vision service can identify an individual and not only the class
+`cow`, it records the sighting against the ear tag:
+
+```sh
+curl -X PUT http://localhost:8000/api/animals/A-441/detection   -H 'Content-Type: application/json'   -H 'X-API-Key: example-shared-key'   -d '{"camera_id":"camera-01","detected_at":"2026-10-29T15:30:00Z"}'
+```
+
+Same `X-API-Key` as the events endpoint, because the caller is the same
+service. It updates `animals.last_detection` and, when `camera_id` is given,
+where the animal was last seen. An unknown tag is a 404: the backend does not
+invent an animal from a sighting, since the herd is registered by the farm
+staff.
+
+This endpoint is not used yet. It exists because the column it writes has been
+in the shared schema from the start, and the contract belongs next to the rest
+of the animal routes rather than being invented later under time pressure.
+
+### Reading the safe zone
+
+The zone the AI service compares detections against now lives in the database
+and is served by `GET /api/zones?camera_id=camera-01`. It needs a user token,
+not the AI key -- which is a gap: the vision service has no account. Until that
+is resolved it keeps using its local configuration, and the endpoint exists for
+the frontend's zone editor.
+
+Coordinates are normalised from 0 to 1, not pixels, so the same zone holds
+whatever resolution the service processes at. `outline` is an optional polygon;
+when it is absent the rectangle applies.
 
 ## Data structure examples
 
@@ -284,7 +413,14 @@ Independent academic examples demonstrate how data structures could apply to Sma
 | List/Array | Indexed access and traversal | Currently detected animals |
 | Stack | LIFO | Recent event history |
 | Queue | FIFO | Pending events |
-| Linked list | Linked nodes | Event sequence |
+| Singly linked list | Nodes with one link | Event sequence |
+| Doubly linked list | Nodes with two links (`prev`, `next`) | Event history reviewed in both directions |
+| Doubly circular list | A ring with two links | Camera rotation in the live view |
+
+The last two exist because a specific screen needs what one link cannot give:
+the event review moves backwards, and the camera carousel has no end. Each
+module's docstring states what it buys and what it costs -- a ring, notably,
+has no traversal that terminates by itself.
 
 Run from the repository root:
 
@@ -293,8 +429,18 @@ python data_structures/array_smartcattle.py
 python data_structures/stack_smartcattle.py
 python data_structures/queue_smartcattle.py
 python data_structures/linked_list_smartcattle.py
+python data_structures/doubly_linked_list_smartcattle.py
+python data_structures/circular_list_smartcattle.py
 ```
 
 ## Current state
 
-`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL` and apply. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's `SMARTCATTLE_API_KEY` on the local PC. Each deploy runs `alembic upgrade head` before starting Uvicorn.
+`render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend` and the static site `smartcattle-frontend`, built from the frontend repository; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL` and apply. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `ALLOWED_ORIGINS` and `VITE_API_BASE_URL` assume the default `*.onrender.com` names; if Render adds a suffix because a name is taken, update both. `AI_API_KEY` is generated; copy the key into the AI service's
+`SMARTCATTLE_API_KEY` on the local PC. `JWT_SECRET` is generated too, so the
+deployment never starts with authentication off -- but note that replacing it
+by hand signs every user out, because tokens are verified against it and there
+is no session table. Each deploy runs `alembic upgrade head` before starting
+Uvicorn.
+
+The first account registered on a fresh deployment becomes the owner; see
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
