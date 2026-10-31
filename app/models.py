@@ -142,6 +142,46 @@ class ZoneRow(Base):
     )
 
 
+class FarmRow(Base):
+    """A farm registered by an owner. Backend-owned, like video_analyses.
+
+    Not in the shared schema because no other service reads it yet; the AI
+    service works per camera and never needs to know which farm a camera is on.
+    """
+
+    __tablename__ = "farms"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    # RESTRICT: an owner account is deactivated, never deleted, so a delete
+    # reaching this table is a mistake worth refusing.
+    owner_id: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(Text)
+    area_hectares: Mapped[float | None] = mapped_column(Float)
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LotRow(Base):
+    """A paddock, stable, pen or pasture inside a farm."""
+
+    __tablename__ = "lots"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    farm_id: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("farms.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    area_square_meters: Mapped[float | None] = mapped_column(Float)
+    capacity: Mapped[int | None] = mapped_column(Integer)
+    boundary: Mapped[list[dict[str, float]] | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
+    active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class VideoAnalysisRow(Base):
     __tablename__ = "video_analyses"
 
