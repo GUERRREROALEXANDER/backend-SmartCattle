@@ -35,11 +35,23 @@ nothing else; there is no session table to consult.
 | `POST /api/auth/register` | anyone | Creates an account and returns a token |
 | `POST /api/auth/login` | anyone | Returns a token |
 | `GET /api/auth/me` | signed in | The current account |
+| `PUT /api/auth/me/password` | signed in | Replaces the caller's password after checking the current one |
+| `GET /api/users` | owner | Accounts, filtered by `role` and `is_active`, paged |
+| `POST /api/users` | owner | Creates an account with a role and an initial password |
+| `GET /api/users/{id}` | owner | One account |
+| `PATCH /api/users/{id}` | owner | Changes the name, role or active flag |
 
 The first account registered becomes the `owner`; everyone after is a
 `worker`. Somebody has to be the owner and there is no other channel to grant
-it. Promoting an account is not an API operation yet -- it is an `UPDATE` on
-`users.role`.
+it. From then on an owner promotes, demotes and deactivates accounts through
+`/api/users`; see [ROLES.md](ROLES.md) for the one rule that limits it.
+
+**Changing a password needs the current one**, even with a valid token, so a
+token left in an unlocked browser cannot be turned into a permanent takeover.
+A wrong current password is `400`, not `401`: the token is fine, and a `401`
+would make the frontend sign the user out. Wrong guesses count against the
+same lockout as login. Tokens issued before the change stay valid until they
+expire, because there is no revocation list.
 
 ## What each role may do
 
@@ -50,6 +62,7 @@ it. Promoting an account is not an API operation yet -- it is an `UPDATE` on
 | Register / update / deactivate an animal | no | yes |
 | Create / update / delete a zone | no | yes |
 | Save a video analysis | yes | yes |
+| Manage accounts and roles | no | yes |
 
 Saving a video analysis is deliberately not owner-only: analysing an uploaded
 clip is the everyday job of whoever is watching the herd.
@@ -118,6 +131,5 @@ guessing loop rather than a patient one.
   changing `JWT_SECRET`, which signs everyone out. Tokens carry a `jti` so a
   revocation list has something to name when one is added.
 - **No password reset.** There is no email sender.
-- **No role management endpoint.** Promoting a worker is a database `UPDATE`.
 - **No audit log.** `users.last_login_at` records the last success, not the
   failures or where they came from.

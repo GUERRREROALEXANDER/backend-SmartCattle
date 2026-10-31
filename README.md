@@ -171,6 +171,11 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | POST | `/api/auth/register` | Creates an account and returns a bearer token; the first account is the owner |
 | POST | `/api/auth/login` | Returns a bearer token for an existing account |
 | GET | `/api/auth/me` | The signed-in account |
+| PUT | `/api/auth/me/password` | Changes the caller's password; needs the current one (400 if wrong, throttled like login) |
+| GET | `/api/users` | Accounts (**owner**); filters `role`, `is_active`; paging `limit` (1–200) and `offset` |
+| POST | `/api/users` | Creates an account with a role and initial password (**owner**); 409 if the email is taken |
+| GET | `/api/users/{id}` | One account (**owner**) |
+| PATCH | `/api/users/{id}` | Changes name, role or active flag (**owner**); 409 if it would leave no active owner |
 | GET | `/api/animals` | The herd, optionally filtered with `?status=active\|inactive\|lost` |
 | GET | `/api/animals/{tag}` | One animal, or a JSON 404 |
 | POST | `/api/animals` | Registers an animal (**owner**); 409 if the ear tag is taken |

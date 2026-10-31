@@ -26,6 +26,8 @@ A worker reads everything and changes nothing about the farm's
 | Register a farm | no | yes |
 | Change or delete a farm, or its lots | no | only the owner who registered it |
 | Save a video analysis | yes | yes |
+| Change their own password | yes | yes |
+| List, create, promote, demote or deactivate accounts | no | yes |
 
 Farms add a second check on top of the role. Being an owner allows
 configuring farms; it does not allow reconfiguring someone else's. A farm
@@ -59,15 +61,27 @@ authority.
 
 ## Granting owner
 
-The first account registered becomes the owner. There is no endpoint to change
-a role, which is a gap rather than a decision -- it needs a rule about who may
-grant what, and that question has not been answered yet.
+The first account registered becomes the owner. After that, any owner manages
+accounts through `/api/users`: creating them with a role, promoting a worker,
+demoting an owner, deactivating anyone. Workers cannot reach those endpoints,
+including to read the list, which is the staff's email addresses.
 
-Until then it is a database update:
-
-```sql
-UPDATE users SET role = 'owner' WHERE email = 'ana@finca.example';
+```http
+PATCH /api/users/2
+{"role": "owner"}
 ```
 
-The change takes effect on the user's next request, because the role is read
+The change takes effect on that user's next request, because the role is read
 from the database rather than from their token.
+
+### At least one active owner remains
+
+Demoting or deactivating the last active owner answers `409`, including when
+owners try it on themselves. With no owner left nobody could grant the role
+again through the API, and the farm's configuration would be frozen until
+someone edited the database by hand. An inactive owner does not count as the
+one remaining.
+
+The check locks the other owners' rows in the same transaction. Two owners
+demoting each other at the same moment would otherwise each see the other
+still in place, and both updates would succeed.
