@@ -133,6 +133,42 @@ def test_two_cameras_keep_their_own_zone_across_a_restart(tmp_path):
         ).json()["total"] == 1
 
 
+def test_account_management_holds_against_the_database(tmp_path):
+    settings = migrated(tmp_path, "accounts.db")
+    with TestClient(create_app(settings)) as client:
+        sign_in(client)
+        owner_id = client.get("/api/auth/me").json()["id"]
+        worker = client.post("/api/users", json={
+            "email": "carla@finca.example", "password": "clave-inicial-1", "full_name": "Carla",
+        }).json()
+        assert client.post("/api/users", json={
+            "email": "carla@finca.example", "password": "clave-inicial-1", "full_name": "Carla",
+        }).status_code == 409
+        assert client.patch(f"/api/users/{owner_id}", json={"role": "worker"}).status_code == 409
+        assert client.patch(f"/api/users/{worker['id']}", json={"role": "owner"}).json()["role"] == "owner"
+        assert client.patch(f"/api/users/{owner_id}", json={"is_active": False}).status_code == 200
+
+    with TestClient(create_app(settings)) as client:
+        signed_in = client.post("/api/auth/login", json={
+            "email": "carla@finca.example", "password": "clave-inicial-1",
+        }).json()
+        client.headers.update({"Authorization": f"Bearer {signed_in['access_token']}"})
+        assert signed_in["user"]["role"] == "owner"
+        page = client.get("/api/users", params={"is_active": True}).json()
+        assert [user["email"] for user in page["items"]] == ["carla@finca.example"]
+        assert client.get(f"/api/users/{owner_id}").json()["is_active"] is False
+        assert client.patch(f"/api/users/{worker['id']}", json={"role": "worker"}).status_code == 409
+
+        assert client.put("/api/auth/me/password", json={
+            "current_password": "clave-inicial-1", "new_password": "clave-nueva-123",
+        }).status_code == 204
+
+    with TestClient(create_app(settings)) as client:
+        assert client.post("/api/auth/login", json={
+            "email": "carla@finca.example", "password": "clave-nueva-123",
+        }).status_code == 200
+
+
 def test_a_farm_and_its_lots_survive_a_restart(tmp_path):
     settings = migrated(tmp_path, "farms.db")
     boundary = [
