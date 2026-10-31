@@ -1,7 +1,20 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Identity, Integer, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,12 +49,137 @@ class EventRow(Base):
     # The API event id. Other services may write events without one; those are not listed.
     ai_event_id: Mapped[UUID | None] = mapped_column(Uuid, unique=True)
     event_type: Mapped[str] = mapped_column("type", Text)
+    # NOT NULL DEFAULT 'medium' in the shared schema, so a row always has one;
+    # it may be the default rather than a considered value.
+    level: Mapped[str] = mapped_column(Text, server_default="medium")
     camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
     detected_object: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
     bbox: Mapped[list[float] | None] = mapped_column("box", JSON().with_variant(JSONB, "postgresql"))
     timestamp: Mapped[datetime] = mapped_column("detected_at", DateTime(timezone=True))
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserRow(Base):
+    """The shared users table. Written only by this service.
+
+    password_hash holds a bcrypt hash and nothing else; see
+    database/schema.sql, which has specified that since before any code could
+    produce one.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    # Stored lower-cased. The shared schema enforces it with
+    # CHECK (email = lower(email)), which is what makes the UNIQUE mean
+    # anything: without it one address registers twice under two spellings.
+    email: Mapped[str] = mapped_column(Text, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    full_name: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text, server_default="worker")
+    # Access is withdrawn by clearing this, never by deleting the row: an
+    # account that is gone cannot be told apart from one that never existed.
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Added by migration 0005 in the database repository.
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnimalRow(Base):
+    """The shared animals table.
+
+    No numeric id: the ear tag is the primary key. It is the real identity of
+    the animal -- the one physically on its ear and the one the staff use --
+    and a second identifier would mean translating between the two on every
+    query. The price is that a natural key changes, which is why
+    events.animal_tag carries ON UPDATE CASCADE.
+    """
+
+    __tablename__ = "animals"
+
+    tag: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, server_default="active")
+    camera_id: Mapped[int | None] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"),
+    )
+    name: Mapped[str | None] = mapped_column(Text)
+    # Written by the AI service when it recognises an individual animal, which
+    # it cannot do yet.
+    last_detection: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ZoneRow(Base):
+    """The shared zones table: the safe zone of a camera.
+
+    Coordinates are normalised from 0 to 1 and not stored in pixels. A zone in
+    pixels is tied to the resolution it was drawn at, so swapping the camera,
+    or the AI service processing at a different size, moves the zone without
+    anyone touching it.
+    """
+
+    __tablename__ = "zones"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    # NOT NULL with ON DELETE CASCADE: a zone without a camera means nothing.
+    camera_id: Mapped[int] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="CASCADE"),
+    )
+    name: Mapped[str] = mapped_column(Text)
+    x_min: Mapped[float] = mapped_column(Float)
+    y_min: Mapped[float] = mapped_column(Float)
+    x_max: Mapped[float] = mapped_column(Float)
+    y_max: Mapped[float] = mapped_column(Float)
+    active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Optional polygon, added to the shared schema by its migration 0020. When
+    # present it defines the zone and the rectangle is its bounding box.
+    outline: Mapped[list[dict[str, float]] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+    )
+
+
+class FarmRow(Base):
+    """A farm registered by an owner. Backend-owned, like video_analyses.
+
+    Not in the shared schema because no other service reads it yet; the AI
+    service works per camera and never needs to know which farm a camera is on.
+    """
+
+    __tablename__ = "farms"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    # RESTRICT: an owner account is deactivated, never deleted, so a delete
+    # reaching this table is a mistake worth refusing.
+    owner_id: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(Text)
+    area_hectares: Mapped[float | None] = mapped_column(Float)
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LotRow(Base):
+    """A paddock, stable, pen or pasture inside a farm."""
+
+    __tablename__ = "lots"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    farm_id: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("farms.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    area_square_meters: Mapped[float | None] = mapped_column(Float)
+    capacity: Mapped[int | None] = mapped_column(Integer)
+    boundary: Mapped[list[dict[str, float]] | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
+    active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class VideoAnalysisRow(Base):
