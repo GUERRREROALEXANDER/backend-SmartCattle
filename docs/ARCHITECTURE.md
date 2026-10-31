@@ -326,3 +326,43 @@ the video overlay and the 3D view draw them at their own size.
 written to access logs by every proxy in front of the API. The handshake uses
 the same `user_for_token` function as the HTTP dependency, so both accept
 exactly the same tokens.
+
+## 12. Video uploads and the processing queue
+
+Decided 2026-10-31 so a 1 GB pasture recording can be analysed by the real
+YOLO model instead of the browser simulation.
+
+**Presigned URLs; the bytes never touch the API.** The browser asks for an
+upload URL, `PUT`s the file straight to an S3-compatible bucket, then calls
+`/complete`. Streaming 1 GB through FastAPI would hold a worker for minutes on
+a farm connection, and Render's proxy limits request time. Cloudflare R2 is
+the production bucket because it charges nothing for egress, which is what
+the AI worker's downloads are; MinIO stands in for it locally with the same
+protocol, so there is one code path. A disk adapter was rejected: it would put
+the bytes back through the API.
+
+**Trust, then verify.** The declared size is signed into the upload URL, and
+`/complete` reads the stored size back with a `HEAD` before queueing. A
+mismatch deletes the object and fails the upload. The storage key is generated
+by the backend (`videos/<uuid>.<ext>`), never taken from the user's file name.
+
+**The table is the queue.** `video_uploads` holds the status
+(`pending_upload` → `queued` → `processing` → `completed` | `failed`). A worker
+claims the oldest queued row with `SELECT … FOR UPDATE SKIP LOCKED`, so two
+workers never take the same video and neither waits for the other. No broker
+is added: the farm runs one or two workers, and PostgreSQL already does this
+correctly.
+
+**Leases recover crashed workers.** Every progress report renews the claim.
+A job silent for longer than `JOB_LEASE` (10 minutes) can be claimed again,
+and after `MAX_ATTEMPTS` (3) the video is marked failed rather than taking
+down workers indefinitely. Results from a worker whose lease was taken are
+refused with `409` before anything is recorded, so a video is never filed
+twice.
+
+**The result reuses the existing analysis contract.** `/complete` takes the
+same body as `POST /api/videos/analyses` and goes through the same
+`record_analysis` function, so the dashboard's analysis views work unchanged.
+Its events raise no live security alert, for the reason given in section 11.
+Per-frame boxes travel in `video.progress` messages with `video_time_sec`, so
+the dashboard can draw them over playback, and are not stored.
