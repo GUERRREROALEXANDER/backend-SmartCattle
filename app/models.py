@@ -228,6 +228,32 @@ class CameraOccupancyRow(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class VideoUploadRow(Base):
+    """An uploaded video file and its place in the processing queue."""
+
+    __tablename__ = "video_uploads"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    file_name: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(100))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    storage_key: Mapped[str] = mapped_column(String(300), unique=True)
+    lot_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("lots.id", ondelete="SET NULL"))
+    uploaded_by: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="RESTRICT"))
+    status: Mapped[str] = mapped_column(Text)
+    frames_total: Mapped[int | None] = mapped_column(Integer)
+    frames_processed: Mapped[int] = mapped_column(Integer, server_default="0")
+    fps: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(String(300))
+    analysis_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("video_analyses.id", ondelete="SET NULL"))
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class VideoAnalysisRow(Base):
     __tablename__ = "video_analyses"
 
