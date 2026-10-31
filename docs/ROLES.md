@@ -26,6 +26,7 @@ A worker reads everything and changes nothing about the farm's
 | Register a farm | no | yes |
 | Change or delete a farm, or its lots | no | only the owner who registered it |
 | Save a video analysis | yes | yes |
+| Read, acknowledge or resolve security alerts; open the live stream | yes | yes |
 | Change their own password | yes | yes |
 | List, create, promote, demote or deactivate accounts | no | yes |
 
