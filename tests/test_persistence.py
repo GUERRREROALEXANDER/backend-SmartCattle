@@ -164,6 +164,30 @@ def test_alerts_and_their_handling_survive_a_restart(tmp_path, event_payload):
         }
 
 
+def test_head_counts_are_kept_per_camera_and_newest_wins(tmp_path):
+    settings = migrated(tmp_path, "occupancy.db")
+    with TestClient(create_app(settings)) as client:
+        def report(camera, inside, observed_at):
+            return client.put(f"/api/ai/cameras/{camera}/occupancy", json={
+                "cattle_inside": inside, "cattle_outside": 1, "observed_at": observed_at,
+            })
+
+        assert report("camera-02", 7, "2026-10-31T15:30:00Z").status_code == 204
+        report("camera-01", 12, "2026-10-31T15:30:05Z")
+        report("camera-01", 3, "2026-10-31T15:30:00Z")
+        report("camera-02", 8, "2026-10-31T15:30:01Z")
+        store = client.app.state.occupancy_store
+        counts = [(item.camera_id, item.cattle_inside) for item in store.list()]
+        assert counts == [("camera-01", 12), ("camera-02", 8)]
+        assert store.list()[0].observed_at.tzinfo is not None
+
+    with TestClient(create_app(settings)) as client:
+        sign_in(client)
+        live = client.get("/api/metrics/live").json()
+        # Received moments ago, so still fresh after the restart.
+        assert (live["cattle_inside"], live["cattle_outside"], live["open_alerts"]) == (20, 2, 0)
+
+
 def test_account_management_holds_against_the_database(tmp_path):
     settings = migrated(tmp_path, "accounts.db")
     with TestClient(create_app(settings)) as client:
