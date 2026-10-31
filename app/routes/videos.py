@@ -10,18 +10,12 @@ from app.dependencies import (
     get_event_store,
     get_video_analysis_store,
 )
-from app.schemas.event import AIEventCreate, EventType
-from app.schemas.video_analysis import (
-    VideoAlertClass,
-    VideoAnalysis,
-    VideoAnalysisCreate,
-    VideoAnalysisList,
-)
+from app.schemas.video_analysis import VideoAnalysis, VideoAnalysisCreate, VideoAnalysisList
 from app.services.event_store import EventStore
+from app.services.video_analysis_recording import record_analysis
 from app.services.video_analysis_store import VideoAnalysisStore
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
-VIDEO_CAMERA_ID = "video-upload"
 
 
 @router.post(
@@ -44,16 +38,7 @@ def create_video_analysis(
     caller could write into the shared events feed through it, which is the one
     path into that table that asked for nothing at all.
     """
-    created_at = clock()
-    analysis = store.add(data, created_at)
-    for alert in data.alerts:
-        if alert.cls is VideoAlertClass.CATTLE:
-            # time_sec is relative to an unknown recording time, so the upload time is the event timestamp.
-            event_store.add(AIEventCreate(
-                event_type=EventType.CATTLE_OUT_OF_ZONE, camera_id=VIDEO_CAMERA_ID,
-                detected_object="cow", confidence=data.avg_confidence, timestamp=created_at,
-            ), created_at)
-    return analysis
+    return record_analysis(data, store, event_store, clock())
 
 
 @router.get("/analyses", response_model=VideoAnalysisList)
