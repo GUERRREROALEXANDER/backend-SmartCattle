@@ -188,6 +188,56 @@ def test_head_counts_are_kept_per_camera_and_newest_wins(tmp_path):
         assert (live["cattle_inside"], live["cattle_outside"], live["open_alerts"]) == (20, 2, 0)
 
 
+def test_the_video_queue_holds_against_the_database(tmp_path, video_analysis_payload):
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.video_upload_store import JOB_LEASE, MAX_ATTEMPTS
+    from tests.test_video_uploads import FakeStorage
+
+    settings = migrated(tmp_path, "videos.db")
+    moment = [datetime.now(UTC)]
+    with TestClient(create_app(settings)) as client:
+        storage = FakeStorage()
+        client.app.state.video_storage = storage
+        client.app.state.clock = lambda: moment[0]
+        sign_in(client)
+
+        def upload(name):
+            ticket = client.post("/api/videos/uploads", json={
+                "file_name": name, "size_bytes": 512 * 1024 ** 2, "content_type": "video/webm",
+            }).json()["upload"]
+            storage.objects[f"videos/{ticket['id']}.webm"] = ticket["size_bytes"]
+            assert client.post(f"/api/videos/uploads/{ticket['id']}/complete").json()["status"] == "queued"
+            moment[0] += timedelta(seconds=1)
+            return ticket["id"]
+
+        doomed, finished = upload("doomed.webm"), upload("finished.webm")
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            job = client.post("/api/ai/video-jobs/claim").json()
+            assert (job["job_id"], job["attempt"]) == (doomed, attempt)
+            moment[0] += JOB_LEASE + timedelta(seconds=1)
+        # The exhausted video is failed on the way and the next one is handed out.
+        assert client.post("/api/ai/video-jobs/claim").json()["job_id"] == finished
+        client.put(f"/api/ai/video-jobs/{finished}/progress", json={"frames_processed": 50, "frames_total": 125})
+        assert client.post(f"/api/ai/video-jobs/{finished}/complete", json=video_analysis_payload).status_code == 200
+        assert client.post(f"/api/ai/video-jobs/{finished}/fail", json={"error": "late"}).status_code == 409
+        assert client.post("/api/ai/video-jobs/claim").status_code == 204
+
+    with TestClient(create_app(settings)) as client:
+        sign_in(client, "luis@finca.example")
+        listing = client.get("/api/videos/uploads").json()
+        assert [(item["id"], item["status"]) for item in listing["items"]] == [
+            (finished, "completed"), (doomed, "failed"),
+        ]
+        done = listing["items"][0]
+        assert done["analysis_id"] is not None and done["frames_total"] == 125
+        assert datetime.fromisoformat(done["finished_at"]).tzinfo is not None
+        assert client.get("/api/videos/uploads", params={"status": "failed"}).json()["total"] == 1
+        missing = "00000000-0000-4000-8000-000000000000"
+        assert client.get(f"/api/videos/uploads/{missing}").status_code == 404
+        assert client.put(f"/api/ai/video-jobs/{missing}/progress", json={"frames_processed": 1}).status_code == 404
+
+
 def test_account_management_holds_against_the_database(tmp_path):
     settings = migrated(tmp_path, "accounts.db")
     with TestClient(create_app(settings)) as client:
