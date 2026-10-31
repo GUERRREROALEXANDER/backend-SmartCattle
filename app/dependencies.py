@@ -31,6 +31,8 @@ from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import OccupancyStore
 from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
+from app.services.video_storage import VideoStorage
+from app.services.video_upload_store import VideoUploadStore
 from app.services.zone_store import ZoneStore
 
 #: Returns the current time, always timezone-aware and in UTC. Injected so
@@ -93,6 +95,22 @@ def get_broadcaster(request: Request) -> Broadcaster:
 def get_occupancy_store(request: Request) -> OccupancyStore:
     store: OccupancyStore = request.app.state.occupancy_store
     return store
+
+
+def get_video_upload_store(request: Request) -> VideoUploadStore:
+    store: VideoUploadStore = request.app.state.video_upload_store
+    return store
+
+
+def require_video_storage(request: Request) -> VideoStorage:
+    """The bucket, or 503 when this deployment has not configured one."""
+    storage: VideoStorage | None = request.app.state.video_storage
+    if storage is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Video storage is not configured on this server",
+        )
+    return storage
 
 
 def get_farm_store(request: Request) -> FarmStore:

@@ -14,7 +14,22 @@ from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
 from app.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
-from app.routes import alerts, animals, auth, cameras, events, farms, health, live, metrics, users, videos, zones
+from app.routes import (
+    alerts,
+    animals,
+    auth,
+    cameras,
+    events,
+    farms,
+    health,
+    live,
+    metrics,
+    users,
+    video_jobs,
+    video_uploads,
+    videos,
+    zones,
+)
 from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
 from app.services.broadcaster import Broadcaster
@@ -25,6 +40,8 @@ from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
 from app.services.user_store import InMemoryUserStore, SqlUserStore
 from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
+from app.services.video_storage import S3VideoStorage
+from app.services.video_upload_store import InMemoryVideoUploadStore, SqlVideoUploadStore
 from app.services.zone_store import InMemoryZoneStore, SqlZoneStore
 
 logger = logging.getLogger(__name__)
@@ -64,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.farm_store = InMemoryFarmStore()
         app.state.alert_store = InMemoryAlertStore()
         app.state.occupancy_store = InMemoryOccupancyStore()
+        app.state.video_upload_store = InMemoryVideoUploadStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -77,6 +95,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.farm_store = SqlFarmStore(sessions)
         app.state.alert_store = SqlAlertStore(sessions)
         app.state.occupancy_store = SqlOccupancyStore(sessions)
+        app.state.video_upload_store = SqlVideoUploadStore(sessions)
+    app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
     app.state.broadcaster = Broadcaster()
     # Per process, not per worker: the lockout is best effort, and Render's
     # free plan runs one worker anyway.
@@ -88,6 +108,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.warning("AI_API_KEY is not set; POST /api/ai/events accepts unauthenticated requests")
     if not settings.auth_enabled:
         logger.warning("JWT_SECRET is not set; /api/auth/* returns 503 and no endpoint is protected")
+    if not settings.video_storage_enabled:
+        logger.warning("VIDEO_STORAGE_* is not set; video uploads and video jobs return 503")
     # Added before CORS so it wraps it: a request rejected by CORS still gets
     # an id and a log line, which is what makes a CORS problem diagnosable
     # instead of a silent browser failure.
@@ -113,6 +135,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(live.router)
     app.include_router(zones.router)
     app.include_router(farms.router)
+    app.include_router(video_uploads.router)
+    app.include_router(video_jobs.router)
     app.include_router(videos.router)
     app.include_router(metrics.router)
 
