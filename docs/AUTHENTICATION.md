@@ -88,7 +88,7 @@ They are not interchangeable, and the difference is about who the caller is.
 | Credential | Caller | Endpoints |
 | --- | --- | --- |
 | `Authorization: Bearer` | a person, through the browser | the herd, the zones, saving an analysis |
-| `X-API-Key` | the AI service | `POST /api/ai/events`, `PUT /api/ai/cameras/{id}/status`, `PUT /api/animals/{tag}/detection` |
+| `X-API-Key` | the AI service | `POST /api/ai/events`, `PUT /api/ai/cameras/{id}/status`, `PUT /api/ai/cameras/{id}/occupancy`, `PUT /api/animals/{tag}/detection` |
 
 `AI_API_KEY` cannot live in the frontend: `VITE_` variables are public in the
 browser bundle, and the frontend's own `.env.example` says so. That is why

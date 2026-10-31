@@ -306,6 +306,21 @@ every message. Running several workers or instances needs a shared bus
 (Redis pub/sub or PostgreSQL `LISTEN/NOTIFY`) behind the same `publish` and
 `subscribe` interface; nothing outside that module would change.
 
+**Live head counts replace estimates.** The AI reports, per camera, how many
+animals are inside and outside the zone (`PUT /api/ai/cameras/{id}/occupancy`).
+Only the latest count per camera is stored, in the backend-owned
+`camera_occupancy` table; section 8's rule against per-frame history still
+holds. `GET /api/metrics/live` sums the counts received within
+`CAMERA_OFFLINE_AFTER_SECONDS`, measured on the backend's clock like camera
+status, and reports older ones as `stale_cameras` instead of freezing their
+last number on screen. A count observed earlier than the stored one is ignored,
+so a late retry cannot move the dashboard back in time. `/summary` keeps its
+video-analysis estimates for the existing frontend.
+
+The bounding boxes in the same report are never stored. They go straight to
+the dashboards as a `detections` message, normalised from 0 to 1 like zones so
+the video overlay and the 3D view draw them at their own size.
+
 **The token goes in the first message.** Browsers cannot set an
 `Authorization` header on a WebSocket, and a token in the query string is
 written to access logs by every proxy in front of the API. The handshake uses

@@ -211,6 +211,8 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/videos/analyses?limit=20` | Latest analyses first; `limit` defaults to 20 and accepts 1–100 |
 | GET | `/api/videos/analyses/{id}` | One analysis with its alerts, or a JSON 404 |
 | GET | `/api/metrics/summary?since=<ISO>` | Event rates and latest-analysis animal estimates; `since` is optional and timezone-aware |
+| GET | `/api/metrics/live` | Live counters from the stores: cameras online, cattle inside/outside from the AI's current counts, open alerts, events in the last hour, `system_status` (signed in) |
+| PUT | `/api/ai/cameras/{camera_id}/occupancy` | AI head count for one camera plus optional normalised boxes (`X-API-Key`); 204. Counts are stored, boxes are only pushed live |
 
 ### Video analyses and metrics
 
@@ -247,6 +249,8 @@ socket.onmessage = ({ data }) => {
 | `alert.created` | the `Alert` | That detection raised a security alert |
 | `alert.updated` | the `Alert` | Someone acknowledged or resolved an alert |
 | `camera.status` | the `Camera` | The AI service reported a camera's state |
+| `occupancy.updated` | `{camera_id, cattle_inside, cattle_outside, observed_at, received_at}` | The AI reported a newer head count |
+| `detections` | `{camera_id, observed_at, detections: [{track_id, label, confidence, bbox, inside_zone}]}` | That count carried boxes; `bbox` is `[x1, y1, x2, y2]` from 0 to 1, so the video overlay and the 3D view scale it to their own size and can flash `inside_zone: false` animals |
 | `pong` | `null` | The client sent `{"type": "ping"}` |
 
 Close codes: `4401` when the first message is missing (5 s), malformed or
