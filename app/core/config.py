@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: RFC 7518 section 3.2: an HMAC key should be at least the digest size,
@@ -32,6 +33,21 @@ class Settings(BaseSettings):
     # needs a table, and what this blocks is a fast loop, not a patient one.
     max_login_attempts: int = Field(default=5, ge=3, le=50)
     login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
+    # S3-compatible bucket for uploaded videos (Cloudflare R2, MinIO). All four
+    # or none: unset means the upload endpoints answer 503, like auth does.
+    video_storage_endpoint: AnyHttpUrl | None = None
+    video_storage_bucket: str | None = None
+    video_storage_access_key_id: SecretStr | None = None
+    video_storage_secret_access_key: SecretStr | None = None
+    # R2 ignores the region but the signature needs one; "auto" is what it documents.
+    video_storage_region: str = "auto"
+    # The host browsers and the AI service reach, when it differs from the one
+    # the API uses -- MinIO in docker-compose is http://minio:9000 to the API
+    # and http://localhost:9000 to the browser. The signature covers the host,
+    # so URLs must be signed for the one that will be called.
+    video_storage_public_endpoint: AnyHttpUrl | None = None
+    # How long a browser has to finish a 1 GB upload over a farm connection.
+    video_upload_url_minutes: int = Field(default=120, ge=5, le=720)
 
     @field_validator("allowed_origins")
     @classmethod
@@ -63,10 +79,37 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator("smartcattle_ai_url", "ai_api_key", "database_url", "jwt_secret", mode="before")
+    @field_validator(
+        "smartcattle_ai_url", "ai_api_key", "database_url", "jwt_secret",
+        "video_storage_endpoint", "video_storage_bucket", "video_storage_access_key_id",
+        "video_storage_secret_access_key", "video_storage_public_endpoint",
+        mode="before",
+    )
     @classmethod
     def empty_to_none(cls, value: object) -> object:
         return None if value == "" else value
+
+    @model_validator(mode="after")
+    def video_storage_is_complete_or_absent(self) -> Self:
+        """Refuses a half-configured bucket at startup.
+
+        Three of four variables set would otherwise boot fine and fail on the
+        first upload, in front of whoever was trying to use it.
+        """
+        parts = (
+            self.video_storage_endpoint, self.video_storage_bucket,
+            self.video_storage_access_key_id, self.video_storage_secret_access_key,
+        )
+        if any(part is not None for part in parts) and not all(part is not None for part in parts):
+            raise ValueError(
+                "Set all of VIDEO_STORAGE_ENDPOINT, VIDEO_STORAGE_BUCKET, VIDEO_STORAGE_ACCESS_KEY_ID "
+                "and VIDEO_STORAGE_SECRET_ACCESS_KEY, or none of them"
+            )
+        return self
+
+    @property
+    def video_storage_enabled(self) -> bool:
+        return self.video_storage_endpoint is not None
 
     @property
     def cors_origins(self) -> list[str]:

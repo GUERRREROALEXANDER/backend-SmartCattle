@@ -7,3 +7,5 @@ pytest-cov>=6.0,<8.0
 # A ring has no natural end, so an unbounded traversal hangs instead of
 # failing. pytest-timeout turns that hang into a reported failure.
 pytest-timeout>=2.3,<3.0
+# Types for boto3's S3 client, so mypy --strict covers the storage adapter.
+boto3-stubs[s3]>=1.40,<2.0
