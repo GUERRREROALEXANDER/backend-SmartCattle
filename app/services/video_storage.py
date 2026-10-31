@@ -54,13 +54,13 @@ def _client(settings: Settings, endpoint: str) -> "S3Client":
         region_name=settings.video_storage_region,
         aws_access_key_id=settings.video_storage_access_key_id.get_secret_value(),
         aws_secret_access_key=settings.video_storage_secret_access_key.get_secret_value(),
-        # Path style works on R2 and MinIO alike, and needs no wildcard DNS.
+        # Path style works on R2 and local S3 servers alike, and needs no wildcard DNS.
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
 
 
 class S3VideoStorage:
-    """Cloudflare R2, MinIO, or any S3-compatible bucket."""
+    """Cloudflare R2, or any S3-compatible bucket."""
 
     def __init__(self, settings: Settings) -> None:
         assert settings.video_storage_endpoint is not None  # noqa: S101 - only built when enabled
@@ -102,7 +102,7 @@ class S3VideoStorage:
     def ensure_bucket(self) -> bool:
         """Creates the bucket when it is missing; True if it was created.
 
-        For local MinIO. R2 buckets are created in the Cloudflare dashboard,
+        For local S3 servers. R2 buckets are created in the Cloudflare dashboard,
         where their CORS rules are set too.
         """
         try:

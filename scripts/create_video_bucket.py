@@ -1,6 +1,6 @@
 """Creates the video bucket if it does not exist, waiting for storage to start.
 
-Used by docker-compose against MinIO: python -m scripts.create_video_bucket
+Used by docker-compose against the local S3 stand-in: python -m scripts.create_video_bucket
 """
 
 import sys

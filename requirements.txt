@@ -12,5 +12,5 @@ pyjwt>=2.10,<3.0
 # Required by pydantic's EmailStr; pydantic does not pull it in itself.
 email-validator>=2.2,<3.0
 # Presigned upload and download URLs for video files in S3-compatible storage
-# (Cloudflare R2 in production, MinIO locally). The backend never streams the bytes.
+# (Cloudflare R2 in production, an S3 stand-in locally). The backend never streams the bytes.
 boto3>=1.40,<2.0
