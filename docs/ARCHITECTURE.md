@@ -337,7 +337,7 @@ upload URL, `PUT`s the file straight to an S3-compatible bucket, then calls
 `/complete`. Streaming 1 GB through FastAPI would hold a worker for minutes on
 a farm connection, and Render's proxy limits request time. Cloudflare R2 is
 the production bucket because it charges nothing for egress, which is what
-the AI worker's downloads are; MinIO stands in for it locally with the same
+the AI worker's downloads are; moto stands in for it locally with the same
 protocol, so there is one code path. A disk adapter was rejected: it would put
 the bytes back through the API.
 

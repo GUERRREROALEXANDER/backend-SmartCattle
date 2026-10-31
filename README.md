@@ -225,7 +225,7 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 ### Video uploads
 
 The file never passes through this API. The browser uploads it straight to
-the bucket (Cloudflare R2 in production, MinIO locally), which keeps a 1 GB
+the bucket (Cloudflare R2 in production, an S3 stand-in in docker-compose), which keeps a 1 GB
 upload off Render's request limits:
 
 ```js
