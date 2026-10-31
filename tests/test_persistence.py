@@ -133,6 +133,67 @@ def test_two_cameras_keep_their_own_zone_across_a_restart(tmp_path):
         ).json()["total"] == 1
 
 
+def test_a_farm_and_its_lots_survive_a_restart(tmp_path):
+    settings = migrated(tmp_path, "farms.db")
+    boundary = [
+        {"latitude": 8.1, "longitude": -75.1}, {"latitude": 8.2, "longitude": -75.1},
+        {"latitude": 8.2, "longitude": -75.2},
+    ]
+    with TestClient(create_app(settings)) as client:
+        sign_in(client)
+        farm = client.post("/api/farms", json={
+            "name": "La Esperanza", "coordinates": {"latitude": 8.75, "longitude": -75.88},
+        }).json()
+        lots_url = f"/api/farms/{farm['id']}/lots"
+        created = client.post(lots_url, json={
+            "name": "North paddock", "kind": "paddock", "boundary": boundary, "camera_id": "camera-01",
+        })
+        assert created.status_code == 201
+        client.post(lots_url, json={"name": "Stable", "kind": "stable", "active": False})
+
+    with TestClient(create_app(settings)) as client:
+        sign_in(client, "otra@finca.example")
+        stored = client.get(f"/api/farms/{farm['id']}").json()
+        assert stored["coordinates"] == {"latitude": 8.75, "longitude": -75.88}
+        assert stored["lot_count"] == 2
+        lots = client.get(lots_url, params={"active": True}).json()
+        assert lots["total"] == 1
+        lot = lots["items"][0]
+        # The camera name round-trips through the numeric foreign key and the
+        # polygon through JSON.
+        assert lot["camera_id"] == "camera-01"
+        assert lot["boundary"] == boundary
+
+
+def test_farm_rules_hold_against_the_database(tmp_path):
+    settings = migrated(tmp_path, "farm-rules.db")
+    with TestClient(create_app(settings)) as client:
+        sign_in(client)
+        farm = client.post("/api/farms", json={
+            "name": "La Esperanza", "location": "Montería", "coordinates": {"latitude": 1, "longitude": 2},
+        }).json()
+        assert client.post("/api/farms", json={"name": "La Esperanza"}).status_code == 409
+        client.post("/api/farms", json={"name": "El Roble"})
+        assert client.patch(f"/api/farms/{farm['id']}", json={"name": "El Roble"}).status_code == 409
+
+        cleared = client.patch(f"/api/farms/{farm['id']}", json={"coordinates": None}).json()
+        assert cleared["coordinates"] is None and cleared["location"] == "Montería"
+
+        lot = client.post(f"/api/farms/{farm['id']}/lots", json={"name": "Pen", "kind": "pen"}).json()
+        client.post(f"/api/farms/{farm['id']}/lots", json={"name": "Pen 2", "kind": "pen"})
+        assert client.post(f"/api/farms/{farm['id']}/lots", json={"name": "Pen", "kind": "pen"}).status_code == 409
+        assert client.patch(f"/api/lots/{lot['id']}", json={"name": "Pen 2"}).status_code == 409
+        moved = client.patch(f"/api/lots/{lot['id']}", json={"camera_id": "camera-07", "kind": "stable"}).json()
+        assert moved["camera_id"] == "camera-07" and moved["kind"] == "stable"
+        assert client.get(f"/api/lots/{lot['id']}").json() == moved
+
+        assert client.delete(f"/api/farms/{farm['id']}").status_code == 409
+        for item in client.get(f"/api/farms/{farm['id']}/lots").json()["items"]:
+            assert client.delete(f"/api/lots/{item['id']}").status_code == 204
+        assert client.delete(f"/api/farms/{farm['id']}").status_code == 204
+        assert client.get("/api/farms").json()["total"] == 1
+
+
 def test_the_event_severity_survives_a_restart(tmp_path, event_payload):
     settings = migrated(tmp_path, "levels.db")
     with TestClient(create_app(settings)) as client:
