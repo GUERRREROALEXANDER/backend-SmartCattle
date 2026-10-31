@@ -14,7 +14,7 @@ GIB = 1024 ** 3
 VIDEO = {"file_name": "north-paddock.mp4", "size_bytes": 5_000_000, "content_type": "video/mp4"}
 BOX = {"track_id": 3, "label": "cow", "confidence": 0.9, "bbox": [0.1, 0.1, 0.2, 0.3], "inside_zone": True}
 STORAGE = {
-    "video_storage_endpoint": "http://minio:9000", "video_storage_bucket": "videos",
+    "video_storage_endpoint": "http://object-storage:5000", "video_storage_bucket": "videos",
     "video_storage_access_key_id": "key-id", "video_storage_secret_access_key": "secret-key",
 }
 
@@ -355,7 +355,7 @@ def test_upload_status_changes_reach_the_dashboard(auth_client, owner, owner_hea
 
 def test_a_half_configured_bucket_refuses_to_start():
     with pytest.raises(ValidationError, match="VIDEO_STORAGE_BUCKET"):
-        Settings(_env_file=None, video_storage_endpoint="http://minio:9000")
+        Settings(_env_file=None, video_storage_endpoint="http://object-storage:5000")
 
 
 def test_empty_storage_variables_mean_unset():
