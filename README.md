@@ -395,6 +395,8 @@ For production, set `ALLOWED_ORIGINS=https://your-frontend-domain.example`.
 
 ## Deploying on Render
 
+Step-by-step setup for Render, Neon and Cloudflare R2, the local Docker stack and other container hosts is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). To run everything locally with PostgreSQL and video storage: `docker compose up --build`.
+
 `render.yaml` is a Render Blueprint that creates the web service `smartcattle-backend`; PostgreSQL is hosted on [Neon](https://neon.com). In Render: **New → Blueprint**, select this repository, paste the Neon connection string (`postgresql://...?sslmode=require`) into `DATABASE_URL`, then fill `ALLOWED_ORIGINS` with the frontend URL. Migrations create the tables, so do not also run the database repository's `schema.sql` on the same database. `DATABASE_URL` is entered by hand and `AI_API_KEY` is generated; copy the key into the AI service's
 `SMARTCATTLE_API_KEY` on the local PC. `JWT_SECRET` is generated too, so the
 deployment never starts with authentication off -- but note that replacing it
