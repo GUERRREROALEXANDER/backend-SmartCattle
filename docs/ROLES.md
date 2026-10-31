@@ -19,11 +19,20 @@ A worker reads everything and changes nothing about the farm's
 
 | | Worker | Owner |
 | --- | --- | --- |
-| Read animals, events, cameras, metrics, zones | yes | yes |
+| Read animals, events, cameras, metrics, zones, farms, lots | yes | yes |
 | Register an animal | no | yes |
 | Update or deactivate an animal | no | yes |
 | Create, update or delete a zone | no | yes |
+| Register a farm | no | yes |
+| Change or delete a farm, or its lots | no | only the owner who registered it |
 | Save a video analysis | yes | yes |
+
+Farms add a second check on top of the role. Being an owner allows
+configuring farms; it does not allow reconfiguring someone else's. A farm
+records the account that registered it in `owner_id`, and every write to the
+farm or its lots compares that with the caller. Another owner gets `403`, for
+the same reason a worker does: farms are readable by every signed-in user, so
+a `404` would hide nothing.
 
 The split is between watching the farm and defining it. Registering an animal
 is deciding what the herd is; configuring a zone is deciding what counts as an

@@ -243,3 +243,28 @@ anything the browser calls, because `VITE_` variables are public in the
 bundle. That is why `POST /api/videos/analyses` -- which writes into the shared
 events feed -- could not be protected until there were users to authenticate,
 and it is now behind a bearer token.
+
+## 10. Farms and lots
+
+Decided 2026-10-31 to replace the farm name the frontend had hardcoded.
+
+**Backend-owned tables.** `farms` and `lots` are created by revision `0007`
+and are not in the shared schema. No other service reads them: the AI service
+works per camera and never needs to know which farm a camera is on. They can
+move to the database repository the day another service needs them.
+
+**Geographic, not normalised.** Zones are normalised to one camera's frame
+because the AI compares detections against them. A lot exists on the ground
+whether or not a camera sees it, so its optional `boundary` is a WGS84 polygon
+(3 to 100 points) and its size is `area_square_meters`. A lot links to the
+camera that watches it through `camera_id`; the zone inside that camera's
+frame stays what the AI evaluates.
+
+**One store for both.** A lot only exists inside a farm, so `FarmStore` owns
+both tables. The rule that a farm with lots cannot be deleted needs both in one
+transaction, and the database's `ON DELETE CASCADE` would otherwise erase the
+lot layout silently.
+
+**Ordering by id.** Lists are ordered by creation, not by name. SQLite and
+PostgreSQL collate names differently, and the two store implementations must
+return the same order.

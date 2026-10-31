@@ -183,6 +183,16 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | POST | `/api/zones/camera/{camera_id}` | Configures a safe zone (**owner**) |
 | PATCH | `/api/zones/{id}` | Partial update (**owner**); the geometry is replaced as a whole |
 | DELETE | `/api/zones/{id}` | Removes a zone (**owner**) |
+| GET | `/api/farms` | Registered farms with their `lot_count` (signed in) |
+| POST | `/api/farms` | Registers a farm owned by the caller (**owner**); 409 if the caller already has one with that name |
+| GET | `/api/farms/{id}` | One farm, or a JSON 404 (signed in) |
+| PATCH | `/api/farms/{id}` | Partial update (**the farm's owner**); omitted fields keep their value, `null` clears an optional one |
+| DELETE | `/api/farms/{id}` | Deletes the farm (**the farm's owner**); 409 while it still has lots |
+| GET | `/api/farms/{id}/lots` | The farm's lots, optionally `?active=true\|false` (signed in) |
+| POST | `/api/farms/{id}/lots` | Adds a paddock, stable, pen or pasture (**the farm's owner**); 409 on a duplicate name in that farm |
+| GET | `/api/lots/{id}` | One lot, or a JSON 404 (signed in) |
+| PATCH | `/api/lots/{id}` | Partial update (**the farm's owner**) |
+| DELETE | `/api/lots/{id}` | Removes a lot (**the farm's owner**) |
 | GET | `/api/events` | Event feed, newest received first. Filters: `camera_id`, `level`, `event_type`; paging: `limit` (1–200, default 50) and `offset` |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
