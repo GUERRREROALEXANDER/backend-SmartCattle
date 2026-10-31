@@ -14,8 +14,10 @@ from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
 from app.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
-from app.routes import animals, auth, cameras, events, farms, health, metrics, users, videos, zones
+from app.routes import alerts, animals, auth, cameras, events, farms, health, live, metrics, users, videos, zones
+from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
+from app.services.broadcaster import Broadcaster
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
@@ -59,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.animal_store = InMemoryAnimalStore()
         app.state.zone_store = InMemoryZoneStore()
         app.state.farm_store = InMemoryFarmStore()
+        app.state.alert_store = InMemoryAlertStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -70,6 +73,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.animal_store = SqlAnimalStore(sessions)
         app.state.zone_store = SqlZoneStore(sessions)
         app.state.farm_store = SqlFarmStore(sessions)
+        app.state.alert_store = SqlAlertStore(sessions)
+    app.state.broadcaster = Broadcaster()
     # Per process, not per worker: the lockout is best effort, and Render's
     # free plan runs one worker anyway.
     app.state.login_throttle = LoginThrottle(
@@ -101,6 +106,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(animals.router)
     app.include_router(events.router)
     app.include_router(cameras.router)
+    app.include_router(alerts.router)
+    app.include_router(live.router)
     app.include_router(zones.router)
     app.include_router(farms.router)
     app.include_router(videos.router)

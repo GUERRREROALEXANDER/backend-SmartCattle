@@ -2,8 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import Clock, get_clock, get_event_store, verify_api_key
+from app.dependencies import Clock, get_alert_store, get_broadcaster, get_clock, get_event_store, verify_api_key
 from app.schemas.event import AIEventCreate, Event, EventLevel, EventList, EventType
+from app.services.alert_store import AlertStore
+from app.services.broadcaster import Broadcaster
 from app.services.event_store import EventQuery, EventStore
 
 router = APIRouter(tags=["events"])
@@ -43,6 +45,21 @@ def list_events(
 def create_event(
     data: AIEventCreate,
     store: EventStore = Depends(get_event_store),
+    alerts: AlertStore = Depends(get_alert_store),
+    broadcaster: Broadcaster = Depends(get_broadcaster),
     clock: Clock = Depends(get_clock),
 ) -> Event:
-    return store.add(data, clock())
+    """Stores a live detection, raises its security alert and pushes both to open dashboards.
+
+    The alert is raised here and not in the event store, because only this
+    endpoint carries live detections. Events derived from an uploaded video
+    (POST /api/videos/analyses) go into the same feed but describe recorded
+    footage; alerting on them would sound an alarm for something that already
+    happened.
+    """
+    now = clock()
+    event = store.add(data, now)
+    alert = alerts.raise_for(event, now)
+    broadcaster.publish("event.created", event, now)
+    broadcaster.publish("alert.created", alert, now)
+    return event

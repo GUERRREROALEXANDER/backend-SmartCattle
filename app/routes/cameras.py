@@ -4,8 +4,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.core.config import Settings
-from app.dependencies import Clock, get_app_settings, get_camera_store, get_clock, verify_api_key
+from app.dependencies import Clock, get_app_settings, get_broadcaster, get_camera_store, get_clock, verify_api_key
 from app.schemas.camera import Camera, CameraList, CameraRecord, CameraStatusReport, effective_status
+from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
 
 router = APIRouter(tags=["cameras"])
@@ -58,9 +59,12 @@ def report_camera_status(
     report: CameraStatusReport,
     store: CameraStore = Depends(get_camera_store),
     settings: Settings = Depends(get_app_settings),
+    broadcaster: Broadcaster = Depends(get_broadcaster),
     clock: Clock = Depends(get_clock),
 ) -> Camera:
     # One reading of the clock: the stored timestamp and the status derived
     # from it must agree, or a fresh report could come back already offline.
     now = clock()
-    return _camera(store.report(camera_id, report, now), now, settings)
+    camera = _camera(store.report(camera_id, report, now), now, settings)
+    broadcaster.publish("camera.status", camera, now)
+    return camera
