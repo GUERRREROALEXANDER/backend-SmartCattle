@@ -20,6 +20,16 @@ services:
         sync: false
       - key: AI_API_KEY
         generateValue: true
+      # Signs the access tokens. generateValue so the deployment never runs with
+      # authentication off and never gets a secret somebody typed from memory.
+      #
+      # Render generates this once and keeps it across deploys. Replacing it by
+      # hand signs every user out, because tokens are verified against it and
+      # there is no session table to consult.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_MINUTES
+        value: "60"
       - key: ALLOWED_ORIGINS
         value: https://smartcattle-frontend.onrender.com,http://localhost:5173
       # The AI service runs on the farm PC; this only tells the frontend that vision is set up.
@@ -27,6 +37,21 @@ services:
         value: http://localhost:8090
       - key: CAMERA_OFFLINE_AFTER_SECONDS
         value: "60"
+      # Cloudflare R2 bucket for uploaded videos (docs/DEPLOYMENT.md). Leave
+      # all four empty to switch video uploads off (they answer 503); setting
+      # only some of them stops the service from starting.
+      - key: VIDEO_STORAGE_ENDPOINT
+        sync: false
+      - key: VIDEO_STORAGE_BUCKET
+        sync: false
+      - key: VIDEO_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: VIDEO_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: VIDEO_STORAGE_REGION
+        value: auto
+      - key: VIDEO_UPLOAD_URL_MINUTES
+        value: "120"
 
   - type: web
     name: smartcattle-frontend
