@@ -4,10 +4,20 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.core.config import Settings
-from app.dependencies import Clock, get_app_settings, get_broadcaster, get_camera_store, get_clock, verify_api_key
+from app.dependencies import (
+    Clock,
+    get_app_settings,
+    get_broadcaster,
+    get_camera_store,
+    get_clock,
+    get_occupancy_store,
+    verify_api_key,
+)
 from app.schemas.camera import Camera, CameraList, CameraRecord, CameraStatusReport, effective_status
+from app.schemas.occupancy import DetectionFrame, OccupancyReport
 from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
+from app.services.occupancy_store import OccupancyStore
 
 router = APIRouter(tags=["cameras"])
 CameraId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
@@ -68,3 +78,33 @@ def report_camera_status(
     camera = _camera(store.report(camera_id, report, now), now, settings)
     broadcaster.publish("camera.status", camera, now)
     return camera
+
+
+@router.put(
+    "/api/ai/cameras/{camera_id}/occupancy", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(verify_api_key)],
+)
+def report_occupancy(
+    camera_id: CameraId,
+    report: OccupancyReport,
+    store: OccupancyStore = Depends(get_occupancy_store),
+    broadcaster: Broadcaster = Depends(get_broadcaster),
+    clock: Clock = Depends(get_clock),
+) -> None:
+    """The AI's head count for one camera, with the boxes behind it.
+
+    The counts are stored and feed GET /api/metrics/live. The boxes are only
+    pushed to open dashboards, where the video overlay and the 3D view draw
+    them; they are never stored (ARCHITECTURE section 8).
+
+    204 even when the report is older than the stored one and is ignored: the
+    AI did nothing wrong by retrying, and there is nothing for it to fix.
+    """
+    now = clock()
+    occupancy = store.record(camera_id, report, now)
+    if occupancy is None:
+        return
+    broadcaster.publish("occupancy.updated", occupancy, now)
+    if report.detections:
+        frame = DetectionFrame(camera_id=camera_id, observed_at=report.observed_at, detections=report.detections)
+        broadcaster.publish("detections", frame, now)

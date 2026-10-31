@@ -28,6 +28,7 @@ from app.services.camera_store import CameraStore
 from app.services.event_store import EventStore
 from app.services.farm_store import FarmStore
 from app.services.login_throttle import LoginThrottle
+from app.services.occupancy_store import OccupancyStore
 from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
 from app.services.zone_store import ZoneStore
@@ -87,6 +88,11 @@ def get_alert_store(request: Request) -> AlertStore:
 def get_broadcaster(request: Request) -> Broadcaster:
     broadcaster: Broadcaster = request.app.state.broadcaster
     return broadcaster
+
+
+def get_occupancy_store(request: Request) -> OccupancyStore:
+    store: OccupancyStore = request.app.state.occupancy_store
+    return store
 
 
 def get_farm_store(request: Request) -> FarmStore:
