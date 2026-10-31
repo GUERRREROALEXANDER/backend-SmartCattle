@@ -60,6 +60,8 @@ class AlertStore(Protocol):
 
     def page(self, query: AlertQuery) -> AlertPage: ...
 
+    def count_open(self) -> int: ...
+
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None: ...
 
 
@@ -110,6 +112,10 @@ class InMemoryAlertStore:
                 (alert for alert in self._alerts.values() if query.matches(alert)), key=_newest_first, reverse=True,
             )
         return AlertPage(items=matching[query.offset:query.offset + query.limit], total=len(matching))
+
+    def count_open(self) -> int:
+        with self._lock:
+            return sum(1 for alert in self._alerts.values() if alert.status is AlertStatus.OPEN)
 
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None:
         with self._lock:
@@ -182,6 +188,13 @@ class SqlAlertStore:
         with self._sessions() as session:
             items = [_to_alert(row, camera) for row, camera in session.execute(rows)]
             return AlertPage(items=items, total=int(session.scalar(total) or 0))
+
+    def count_open(self) -> int:
+        query = select(func.count()).select_from(SecurityAlertRow).where(
+            SecurityAlertRow.status == AlertStatus.OPEN.value,
+        )
+        with self._sessions() as session:
+            return int(session.scalar(query) or 0)
 
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None:
         with self._sessions.begin() as session:
