@@ -27,8 +27,9 @@ WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY alembic.ini ./
 COPY migrations ./migrations
-# Migration 0001 applies the shared schema to an empty PostgreSQL database.
+# The shared schema and its migrations, applied by revisions 0001 and 0012.
 COPY database/schema.sql ./database/schema.sql
+COPY database/migrations ./database/migrations
 COPY app ./app
 
 USER smartcattle
