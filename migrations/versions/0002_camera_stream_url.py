@@ -37,6 +37,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name == "postgresql":
+        # The shared v_camera_health view reads these columns, and is only
+        # created when they exist (database repository, migration 0012). It
+        # cannot outlive them; re-applying that migration recreates it.
+        op.execute("DROP VIEW IF EXISTS v_camera_health")
     with op.batch_alter_table("cameras") as batch:
         batch.drop_constraint("ck_cameras_reported_status", type_="check")
         for name in reversed(COLUMNS):
