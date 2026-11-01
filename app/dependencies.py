@@ -25,6 +25,7 @@ from app.services.alert_store import AlertStore
 from app.services.animal_store import AnimalStore
 from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
+from app.services.catalog_store import CatalogStore
 from app.services.event_store import EventStore
 from app.services.farm_store import FarmStore
 from app.services.login_throttle import LoginThrottle
@@ -120,6 +121,11 @@ def get_farm_store(request: Request) -> FarmStore:
 
 def get_user_store(request: Request) -> UserStore:
     store: UserStore = request.app.state.user_store
+    return store
+
+
+def get_catalog_store(request: Request) -> CatalogStore:
+    store: CatalogStore = request.app.state.catalog_store
     return store
 
 
