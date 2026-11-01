@@ -8,8 +8,12 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.db import SessionFactory
-from app.models import CameraRow
+from app.models import CameraRow, CameraStatusChangeRow
 from app.schemas.camera import CameraRecord, CameraStatus, CameraStatusReport, apply_report
+from app.schemas.report import CameraStatusChange
+
+# Module-level alias: inside the store classes `list` names their method.
+Changes = list[CameraStatusChange]
 
 # Copied verbatim from the record onto the row; reported_status needs .value.
 REPORTED_FIELDS = (
@@ -23,21 +27,55 @@ class CameraStore(Protocol):
 
     def list(self) -> list[CameraRecord]: ...
 
+    def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
+        """Changes in [start, end), oldest first."""
+        ...
+
+
+def is_a_change(previous: CameraRecord | None, current: CameraRecord) -> bool:
+    """Whether a report starts a new period in the history.
+
+    A repeated status is the camera saying it is still fine, several times a
+    minute; recording each would be the per-report history this table exists
+    to avoid. A new error message while already in error is a change, because
+    it is a different fault.
+    """
+    if previous is None or previous.reported_status is not current.reported_status:
+        return True
+    return current.reported_status is CameraStatus.ERROR and previous.last_error != current.last_error
+
+
+def _change(camera_id: str, record: CameraRecord, at: datetime) -> CameraStatusChange:
+    return CameraStatusChange(
+        camera_id=camera_id, status=record.reported_status, error=record.last_error, changed_at=at,
+    )
+
 
 class InMemoryCameraStore:
     def __init__(self) -> None:
         self._cameras: dict[str, CameraRecord] = {}
+        self._changes: Changes = []
         self._lock = Lock()
 
     def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
         with self._lock:
-            record = apply_report(self._cameras.get(camera_id), camera_id, report, received_at)
+            previous = self._cameras.get(camera_id)
+            record = apply_report(previous, camera_id, report, received_at)
             self._cameras[camera_id] = record
+            if is_a_change(previous, record):
+                self._changes.append(_change(camera_id, record, received_at))
             return record
 
     def list(self) -> list[CameraRecord]:
         with self._lock:
             return [self._cameras[key] for key in sorted(self._cameras)]
+
+    def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
+        with self._lock:
+            return [
+                change for change in self._changes
+                if (camera_id is None or change.camera_id == camera_id) and start <= change.changed_at < end
+            ]
 
 
 def camera_row(session: Session, name: str, *, lock: bool = False) -> CameraRow:
@@ -97,9 +135,32 @@ class SqlCameraStore:
             row.reported_status = record.reported_status.value
             for field in REPORTED_FIELDS:
                 setattr(row, field, getattr(record, field))
+            if is_a_change(previous, record):
+                session.add(CameraStatusChangeRow(
+                    camera_id=row.id, status=record.reported_status.value, error=record.last_error,
+                    changed_at=received_at,
+                ))
             return record
 
     def list(self) -> list[CameraRecord]:
         query = _reported_rows().order_by(CameraRow.name)
         with self._sessions() as session:
             return [_to_record(row) for row in session.scalars(query)]
+
+    def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
+        query = (
+            select(CameraStatusChangeRow, CameraRow.name)
+            .join(CameraRow, CameraStatusChangeRow.camera_id == CameraRow.id)
+            .where(CameraStatusChangeRow.changed_at >= start, CameraStatusChangeRow.changed_at < end)
+            .order_by(CameraStatusChangeRow.changed_at, CameraStatusChangeRow.id)
+        )
+        if camera_id is not None:
+            query = query.where(CameraRow.name == camera_id)
+        with self._sessions() as session:
+            return [
+                CameraStatusChange(
+                    camera_id=name, status=CameraStatus(row.status), error=row.error,
+                    changed_at=_aware_required(row.changed_at),
+                )
+                for row, name in session.execute(query)
+            ]
