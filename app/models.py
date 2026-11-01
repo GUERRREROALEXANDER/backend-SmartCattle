@@ -240,6 +240,57 @@ class CameraOccupancyRow(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class OccupancySampleRow(Base):
+    """The head count per camera, one row per minute.
+
+    The per-second counts are still not kept. One sample a minute -- the last
+    count observed in it -- is enough to chart a day and to answer "how many
+    were out at 3 pm", at 1 440 rows per camera per day instead of 86 400.
+    """
+
+    __tablename__ = "occupancy_samples"
+
+    camera_id: Mapped[int] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="CASCADE"), primary_key=True,
+    )
+    minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    cattle_inside: Mapped[int] = mapped_column(Integer)
+    cattle_outside: Mapped[int] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CameraStatusChangeRow(Base):
+    """A camera's reported status, recorded only when it changes."""
+
+    __tablename__ = "camera_status_changes"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    camera_id: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(String(300))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AuditLogRow(Base):
+    """Who did what: sign-ins, account changes, alert handling, farm and zone edits."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="SET NULL"))
+    # A copy, not a join: a failed sign-in has an address and no account, and
+    # the trail must still read correctly after an account's email changes.
+    actor_email: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text)
+    target_type: Mapped[str | None] = mapped_column(Text)
+    target_id: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 def _catalog_table(name: str) -> Table:
     return Table(
         name, Base.metadata,

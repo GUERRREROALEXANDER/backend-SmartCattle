@@ -25,6 +25,7 @@ from app.routes import (
     health,
     live,
     metrics,
+    reports,
     users,
     video_jobs,
     video_uploads,
@@ -144,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(videos.router)
     app.include_router(metrics.router)
     app.include_router(catalogs.router)
+    app.include_router(reports.router)
 
     @app.exception_handler(RequestValidationError)
     # Starlette passes the request positionally; the handlers do not read it.

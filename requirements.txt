@@ -14,3 +14,6 @@ email-validator>=2.2,<3.0
 # Presigned upload and download URLs for video files in S3-compatible storage
 # (Cloudflare R2 in production, an S3 stand-in locally). The backend never streams the bytes.
 boto3>=1.40,<2.0
+# Time zone database for zoneinfo. Windows and slim container images ship none,
+# and the reports cut days in the farm's zone (America/Bogota).
+tzdata>=2025.2

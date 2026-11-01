@@ -1,36 +1,81 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from app.models import CameraRow
-from app.schemas.camera import CameraRecord, CameraStatusReport, apply_report
+from app.db import SessionFactory
+from app.models import CameraRow, CameraStatusChangeRow
+from app.schemas.camera import CameraRecord, CameraStatus, CameraStatusReport, apply_report
+from app.schemas.report import CameraStatusChange
+
+# Module-level alias: inside the store classes `list` names their method.
+Changes = list[CameraStatusChange]
+
+# Copied verbatim from the record onto the row; reported_status needs .value.
+REPORTED_FIELDS = (
+    "last_report_at", "last_online_at", "last_error",
+    "frame_width", "frame_height", "fps", "stream_url",
+)
 
 
 class CameraStore(Protocol):
-    def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord: ...
+    def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord: ...
 
     def list(self) -> list[CameraRecord]: ...
+
+    def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
+        """Changes in [start, end), oldest first."""
+        ...
+
+
+def is_a_change(previous: CameraRecord | None, current: CameraRecord) -> bool:
+    """Whether a report starts a new period in the history.
+
+    A repeated status is the camera saying it is still fine, several times a
+    minute; recording each would be the per-report history this table exists
+    to avoid. A new error message while already in error is a change, because
+    it is a different fault.
+    """
+    if previous is None or previous.reported_status is not current.reported_status:
+        return True
+    return current.reported_status is CameraStatus.ERROR and previous.last_error != current.last_error
+
+
+def _change(camera_id: str, record: CameraRecord, at: datetime) -> CameraStatusChange:
+    return CameraStatusChange(
+        camera_id=camera_id, status=record.reported_status, error=record.last_error, changed_at=at,
+    )
 
 
 class InMemoryCameraStore:
     def __init__(self) -> None:
         self._cameras: dict[str, CameraRecord] = {}
+        self._changes: Changes = []
         self._lock = Lock()
 
-    def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
+    def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
         with self._lock:
-            record = apply_report(self._cameras.get(camera_id), camera_id, report, datetime.now(timezone.utc))
+            previous = self._cameras.get(camera_id)
+            record = apply_report(previous, camera_id, report, received_at)
             self._cameras[camera_id] = record
+            if is_a_change(previous, record):
+                self._changes.append(_change(camera_id, record, received_at))
             return record
 
     def list(self) -> list[CameraRecord]:
         with self._lock:
             return [self._cameras[key] for key in sorted(self._cameras)]
+
+    def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
+        with self._lock:
+            return [
+                change for change in self._changes
+                if (camera_id is None or change.camera_id == camera_id) and start <= change.changed_at < end
+            ]
 
 
 def camera_row(session: Session, name: str, *, lock: bool = False) -> CameraRow:
@@ -41,39 +86,81 @@ def camera_row(session: Session, name: str, *, lock: bool = False) -> CameraRow:
     return session.scalars(query.with_for_update() if lock else query).one()
 
 
+def _reported_rows() -> Select[CameraRow]:
+    """Cameras the AI service has actually reported on.
+
+    Rows exist for cameras nobody reported yet: the seed row in
+    database/schema.sql, and the ones camera_row() creates the first time an
+    event names a camera. Both status columns stay NULL there, and a camera
+    with no status cannot be described by CameraRecord, so it is left out
+    rather than reported as a guess.
+    """
+    return select(CameraRow).where(
+        CameraRow.last_report_at.is_not(None),
+        CameraRow.reported_status.is_not(None),
+    )
+
+
 def _to_record(row: CameraRow) -> CameraRecord:
+    assert row.reported_status is not None  # noqa: S101 - guaranteed by _reported_rows
+    assert row.last_report_at is not None  # noqa: S101
     return CameraRecord(
-        id=row.name, reported_status=row.reported_status,
-        last_report_at=_aware(row.last_report_at), last_online_at=_aware(row.last_online_at),
+        id=row.name, reported_status=CameraStatus(row.reported_status),
+        last_report_at=_aware_required(row.last_report_at), last_online_at=_aware(row.last_online_at),
         last_error=row.last_error, frame_width=row.frame_width, frame_height=row.frame_height, fps=row.fps,
         stream_url=row.stream_url,
     )
 
 
-def _aware(value: datetime | None) -> datetime | None:
+def _aware_required(value: datetime) -> datetime:
     # SQLite drops the timezone; PostgreSQL returns timestamptz in the session time zone.
-    if value is None:
-        return None
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    return None if value is None else _aware_required(value)
 
 
 class SqlCameraStore:
-    def __init__(self, session_factory: sessionmaker) -> None:
+    def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
-    def report(self, camera_id: str, report: CameraStatusReport) -> CameraRecord:
-        now = datetime.now(timezone.utc)
+    def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
         with self._sessions.begin() as session:
             row = camera_row(session, camera_id, lock=True)
-            previous = _to_record(row) if row.last_report_at is not None else None
-            record = apply_report(previous, camera_id, report, now)
+            # A row with no status yet has nothing to carry over.
+            reported_before = row.last_report_at is not None and row.reported_status is not None
+            previous = _to_record(row) if reported_before else None
+            record = apply_report(previous, camera_id, report, received_at)
             row.reported_status = record.reported_status.value
-            for field in ("last_report_at", "last_online_at", "last_error", "frame_width", "frame_height", "fps", "stream_url"):
+            for field in REPORTED_FIELDS:
                 setattr(row, field, getattr(record, field))
+            if is_a_change(previous, record):
+                session.add(CameraStatusChangeRow(
+                    camera_id=row.id, status=record.reported_status.value, error=record.last_error,
+                    changed_at=received_at,
+                ))
             return record
 
     def list(self) -> list[CameraRecord]:
-        # Cameras the AI service never reported (seed rows, cameras only named by events) have no status.
-        query = select(CameraRow).where(CameraRow.last_report_at.is_not(None)).order_by(CameraRow.name)
+        query = _reported_rows().order_by(CameraRow.name)
         with self._sessions() as session:
             return [_to_record(row) for row in session.scalars(query)]
+
+    def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
+        query = (
+            select(CameraStatusChangeRow, CameraRow.name)
+            .join(CameraRow, CameraStatusChangeRow.camera_id == CameraRow.id)
+            .where(CameraStatusChangeRow.changed_at >= start, CameraStatusChangeRow.changed_at < end)
+            .order_by(CameraStatusChangeRow.changed_at, CameraStatusChangeRow.id)
+        )
+        if camera_id is not None:
+            query = query.where(CameraRow.name == camera_id)
+        with self._sessions() as session:
+            return [
+                CameraStatusChange(
+                    camera_id=name, status=CameraStatus(row.status), error=row.error,
+                    changed_at=_aware_required(row.changed_at),
+                )
+                for row, name in session.execute(query)
+            ]

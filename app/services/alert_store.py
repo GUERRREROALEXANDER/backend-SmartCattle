@@ -62,6 +62,10 @@ class AlertStore(Protocol):
 
     def count_open(self) -> int: ...
 
+    def created_between(self, start: datetime, end: datetime) -> list[Alert]:
+        """Alerts raised in [start, end), oldest first. For reports, which bound the window."""
+        ...
+
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None: ...
 
 
@@ -116,6 +120,11 @@ class InMemoryAlertStore:
     def count_open(self) -> int:
         with self._lock:
             return sum(1 for alert in self._alerts.values() if alert.status is AlertStatus.OPEN)
+
+    def created_between(self, start: datetime, end: datetime) -> list[Alert]:
+        with self._lock:
+            found = [alert for alert in self._alerts.values() if start <= alert.created_at < end]
+        return sorted(found, key=_newest_first)
 
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None:
         with self._lock:
@@ -195,6 +204,14 @@ class SqlAlertStore:
         )
         with self._sessions() as session:
             return int(session.scalar(query) or 0)
+
+    def created_between(self, start: datetime, end: datetime) -> list[Alert]:
+        query = (
+            _WITH_CAMERA.where(SecurityAlertRow.created_at >= start, SecurityAlertRow.created_at < end)
+            .order_by(SecurityAlertRow.created_at, SecurityAlertRow.id)
+        )
+        with self._sessions() as session:
+            return [_to_alert(row, camera) for row, camera in session.execute(query)]
 
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None:
         with self._sessions.begin() as session:
