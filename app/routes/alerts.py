@@ -3,8 +3,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies import Clock, CurrentUser, get_alert_store, get_broadcaster, get_clock
+from app.dependencies import AuditTrail, Clock, CurrentUser, get_alert_store, get_broadcaster, get_clock
 from app.schemas.alert import Alert, AlertList, AlertStatus
+from app.schemas.audit import AuditAction
 from app.schemas.event import EventLevel
 from app.services.alert_store import AlertQuery, AlertStore, AlertTransitionError
 from app.services.broadcaster import Broadcaster
@@ -62,12 +63,26 @@ def _move(
 
 
 @router.post("/{alert_id}/acknowledge", response_model=Alert)
-def acknowledge_alert(alert_id: UUID, user: CurrentUser, store: Store, hub: Hub, clock: Now) -> Alert:
+def acknowledge_alert(
+    alert_id: UUID, user: CurrentUser, store: Store, hub: Hub, clock: Now, audit: AuditTrail,
+) -> Alert:
     """Marks the alert as seen by someone who is dealing with it."""
-    return _move(alert_id, AlertStatus.ACKNOWLEDGED, user.id, store, hub, clock)
+    alert = _move(alert_id, AlertStatus.ACKNOWLEDGED, user.id, store, hub, clock)
+    audit.record(
+        AuditAction.ALERT_ACKNOWLEDGED, actor_id=user.id, actor_email=user.email,
+        target_type="alert", target_id=alert_id,
+    )
+    return alert
 
 
 @router.post("/{alert_id}/resolve", response_model=Alert)
-def resolve_alert(alert_id: UUID, user: CurrentUser, store: Store, hub: Hub, clock: Now) -> Alert:
+def resolve_alert(
+    alert_id: UUID, user: CurrentUser, store: Store, hub: Hub, clock: Now, audit: AuditTrail,
+) -> Alert:
     """Closes the alert, from open or acknowledged."""
-    return _move(alert_id, AlertStatus.RESOLVED, user.id, store, hub, clock)
+    alert = _move(alert_id, AlertStatus.RESOLVED, user.id, store, hub, clock)
+    audit.record(
+        AuditAction.ALERT_RESOLVED, actor_id=user.id, actor_email=user.email,
+        target_type="alert", target_id=alert_id,
+    )
+    return alert

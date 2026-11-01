@@ -17,6 +17,7 @@ from app.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.routes import (
     alerts,
     animals,
+    audit,
     auth,
     cameras,
     catalogs,
@@ -34,6 +35,7 @@ from app.routes import (
 )
 from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
+from app.services.audit_log import InMemoryAuditLog, SqlAuditLog
 from app.services.broadcaster import Broadcaster
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
@@ -86,6 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.occupancy_store = InMemoryOccupancyStore()
         app.state.video_upload_store = InMemoryVideoUploadStore()
         app.state.catalog_store = InMemoryCatalogStore()
+        app.state.audit_log = InMemoryAuditLog()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -101,6 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.occupancy_store = SqlOccupancyStore(sessions)
         app.state.video_upload_store = SqlVideoUploadStore(sessions)
         app.state.catalog_store = SqlCatalogStore(sessions)
+        app.state.audit_log = SqlAuditLog(sessions)
     app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
     app.state.broadcaster = Broadcaster()
     # Per process, not per worker: the lockout is best effort, and Render's
@@ -146,6 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(metrics.router)
     app.include_router(catalogs.router)
     app.include_router(reports.router)
+    app.include_router(audit.router)
 
     @app.exception_handler(RequestValidationError)
     # Starlette passes the request positionally; the handlers do not read it.

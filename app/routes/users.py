@@ -2,7 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
-from app.dependencies import Clock, OwnerUser, get_clock, get_user_store
+from app.dependencies import AuditTrail, Clock, OwnerUser, get_clock, get_user_store
+from app.schemas.audit import AuditAction
 from app.schemas.auth import User, UserRole
 from app.schemas.user import UserAccountCreate, UserList, UserUpdate
 from app.services.user_store import (
@@ -47,18 +48,23 @@ def list_users(
 
 
 @router.post("", response_model=User, status_code=status.HTTP_201_CREATED)
-def create_user(data: UserAccountCreate, _owner: OwnerUser, store: Store, clock: Now) -> User:
+def create_user(data: UserAccountCreate, owner: OwnerUser, store: Store, clock: Now, audit: AuditTrail) -> User:
     """Creates an account with an initial password the owner hands over.
 
     Returns the account and no token: the owner is not signing in as the new
     user, and a token for someone else would be a credential nobody asked for.
     """
     try:
-        return _public(store.create(data, data.role, clock()))
+        created = store.create(data, data.role, clock())
     except EmailAlreadyRegisteredError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="That email is already registered",
         ) from error
+    audit.record(
+        AuditAction.USER_CREATED, actor_id=owner.id, actor_email=owner.email,
+        target_type="user", target_id=created.id, detail={"email": created.email, "role": created.role.value},
+    )
+    return _public(created)
 
 
 @router.get("/{user_id}", response_model=User)
@@ -71,7 +77,7 @@ def get_user(user_id: UserId, _owner: OwnerUser, store: Store) -> User:
 
 @router.patch("/{user_id}", response_model=User)
 def update_user(
-    user_id: UserId, data: UserUpdate, _owner: OwnerUser, store: Store, clock: Now,
+    user_id: UserId, data: UserUpdate, owner: OwnerUser, store: Store, clock: Now, audit: AuditTrail,
 ) -> User:
     """Renames, promotes, demotes, deactivates or reactivates an account.
 
@@ -87,4 +93,8 @@ def update_user(
         ) from error
     if updated is None:
         raise _not_found(user_id)
+    audit.record(
+        AuditAction.USER_UPDATED, actor_id=owner.id, actor_email=owner.email, target_type="user",
+        target_id=user_id, detail=data.model_dump(mode="json", include=data.model_fields_set),
+    )
     return _public(updated)
