@@ -126,8 +126,15 @@ Without `DATABASE_URL` everything is kept in memory and lost on restart. With it
 2. `0002_camera_status` adds the nullable camera status columns the backend needs to `cameras`: `reported_status`, `last_report_at`, `last_online_at`, `last_error`, `frame_width`, `frame_height`, `fps` and `stream_url`.
 3. `0003`–`0010` create the backend-owned tables: `video_analyses`, `video_analysis_alerts`, `farms`, `lots`, `security_alerts`, `camera_occupancy` and `video_uploads`, and make sure `users`, `animals` and `zones` exist.
 4. `0011` and `0012` complete the shared schema: `schema.sql` describes its tables, but its indexes, views (`v_api_events`, `v_camera_health`, `v_active_herd`), comments, the `prune_events` retention function and later columns arrived as the database repository's numbered migrations. `0012` applies them all; each is safe to run twice, so on a database that already has them it changes nothing.
+5. `0013` indexes every foreign key of the backend tables, the database repository's rule.
+6. `0014` adds `length_meters` and `width_meters` to `lots`.
+7. `0015` adds eight catalog tables (`event_types`, `severity_levels`, `alert_statuses`, `camera_statuses`, `lot_kinds`, `user_roles`, `animal_statuses`, `video_upload_statuses`): every coded value with an English and a Spanish label, served by `GET /api/catalogs`. A test fails if a catalog and the enum the API validates against disagree.
+8. `0016` adds the history tables: `occupancy_samples` (the head count per camera, one row per minute), `camera_status_changes` (one row each time a camera's reported status changes) and `audit_log` (who did what).
+9. `0017` adds seven report views for anyone querying PostgreSQL directly: `v_alerts_daily`, `v_alert_response_times`, `v_events_daily`, `v_occupancy_hourly`, `v_camera_status_periods`, `v_farm_overview` and `v_video_processing`. Days follow the session time zone: run `SET TIME ZONE 'America/Bogota';` first for Colombian days.
 
-A fresh PostgreSQL database ends with 14 tables, 3 views and 47 indexes, the same as the shared production database. CI checks this on every push: the persistence tests run against PostgreSQL there, not only SQLite.
+A fresh PostgreSQL database ends with 24 tables, 10 views and 71 indexes. CI checks this on every push: the persistence tests run against PostgreSQL there, not only SQLite, and every view is queried.
+
+**History growth.** `occupancy_samples` grows by at most 1 440 rows per camera per day, roughly 60 MB per camera per year with its indexes. Nothing prunes it yet; on Neon's free 0.5 GB plan, delete old rows once a year (`DELETE FROM occupancy_samples WHERE minute < now() - interval '1 year'`).
 
 Alembic also creates its own `alembic_version` table. `alembic downgrade base` removes the backend-owned tables and the status columns; the shared tables and their rows stay.
 
@@ -204,9 +211,9 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | PATCH | `/api/farms/{id}` | Partial update (**the farm's owner**); omitted fields keep their value, `null` clears an optional one |
 | DELETE | `/api/farms/{id}` | Deletes the farm (**the farm's owner**); 409 while it still has lots |
 | GET | `/api/farms/{id}/lots` | The farm's lots, optionally `?active=true\|false` (signed in) |
-| POST | `/api/farms/{id}/lots` | Adds a paddock, stable, pen or pasture (**the farm's owner**); 409 on a duplicate name in that farm |
+| POST | `/api/farms/{id}/lots` | Adds a paddock, stable, pen or pasture (**the farm's owner**); only `name` is required, `kind` defaults to `paddock`. `length_meters` and `width_meters` go together and give the area; 409 on a duplicate name in that farm |
 | GET | `/api/lots/{id}` | One lot, or a JSON 404 (signed in) |
-| PATCH | `/api/lots/{id}` | Partial update (**the farm's owner**) |
+| PATCH | `/api/lots/{id}` | Partial update (**the farm's owner**). New length and width bring their area; a new area alone clears them |
 | DELETE | `/api/lots/{id}` | Removes a lot (**the farm's owner**) |
 | GET | `/api/events` | Event feed, newest received first. Filters: `camera_id`, `level`, `event_type`; paging: `limit` (1–200, default 50) and `offset` |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
@@ -226,6 +233,18 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | PUT | `/api/ai/video-jobs/{id}/progress` | Frames processed plus that frame's boxes; renews the job lease (`X-API-Key`) |
 | POST | `/api/ai/video-jobs/{id}/complete` | Delivers the analysis, same body as `POST /api/videos/analyses` (`X-API-Key`) |
 | POST | `/api/ai/video-jobs/{id}/fail` | Gives up on a video the worker cannot process (`X-API-Key`) |
+| GET | `/api/catalogs` | Every coded value with English and Spanish labels, for selects and badges (public) |
+| GET | `/api/reports/occupancy?camera_id=&start=&end=` | Head count per camera and minute (**signed in**) |
+| GET | `/api/reports/camera-status?camera_id=&start=&end=` | Each change in a camera's reported status (**signed in**) |
+| GET | `/api/reports/alerts?start=&end=&tz=` | Alerts per day by severity and status, average minutes to acknowledge and resolve (**signed in**) |
+| GET | `/api/reports/events?start=&end=&tz=` | Detections per day and camera, by severity (**signed in**) |
+| GET | `/api/audit-log?actor_id=&action=&target_type=&target_id=&start=&end=&limit=&offset=` | Who did what, newest first (**owner**) |
+
+### Reports and history
+
+The report endpoints default to the last 7 days and accept at most 92; `start` is inclusive, `end` exclusive, and a time without a zone is read as UTC. Days are cut in `tz`, an IANA name that defaults to `America/Bogota`, so an alert at 22:00 in Colombia counts on that day and not on the next one in UTC. An empty or wider window, or an unknown zone, is a 422.
+
+The audit log records sign-ins (failed ones with the address typed), account changes, alert handling, and farm, lot, zone, animal and video-upload changes. It stores which fields changed, never passwords. It is written after the action, so a failure to write it is logged and does not turn a completed action into an error.
 
 ### Video uploads
 
