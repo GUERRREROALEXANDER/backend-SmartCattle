@@ -13,6 +13,21 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    # A throwaway PostgreSQL for the persistence tests. SQLite alone hid a
+    # missing column and an insert-order bug that only PostgreSQL enforces.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: smartcattle
+          POSTGRES_PASSWORD: smartcattle
+          POSTGRES_DB: smartcattle_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U smartcattle -d smartcattle_test"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://smartcattle:smartcattle@localhost:5432/smartcattle_test
     steps:
       - uses: actions/checkout@v5
 
@@ -77,7 +92,15 @@ jobs:
 
       - name: Logs on failure
         if: failure()
-        run: docker compose logs --no-color
+        # Also raised as annotations, which stay readable on the run page
+        # without opening the raw log.
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color
+          for service in bucket api object-storage; do
+            tail=$(docker compose logs --no-color --tail 25 "$service" 2>&1 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$service logs::$tail"
+          done
 
       - name: Stop the stack
         if: always()
