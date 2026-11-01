@@ -378,3 +378,57 @@ def test_the_event_severity_survives_a_restart(tmp_path, event_payload):
     with TestClient(create_app(settings)) as client:
         # Read from the stored column, not recomputed on the way out.
         assert client.get("/api/events").json()["items"][0]["level"] == "high"
+
+
+def test_history_reports_and_audit_survive_a_restart(tmp_path):
+    from datetime import UTC, datetime
+
+    settings = migrated(tmp_path, "history.db")
+    now = datetime(2026, 10, 31, 18, 0, tzinfo=UTC)
+    window = {"start": "2026-10-31T00:00:00Z", "end": "2026-11-01T00:00:00Z", "tz": "UTC"}
+    with TestClient(create_app(settings)) as client:
+        client.app.state.clock = lambda: now
+        sign_in(client)
+        counts = [("2026-10-31T17:00:10Z", 4), ("2026-10-31T17:00:50Z", 5), ("2026-10-31T17:01:00Z", 6)]
+        for observed_at, inside in counts:
+            client.put("/api/ai/cameras/camera-01/occupancy", json={
+                "cattle_inside": inside, "cattle_outside": 1, "observed_at": observed_at,
+            })
+        for status in ("online", "online", "offline"):
+            client.put("/api/ai/cameras/camera-01/status", json={"status": status, "observed_at": now.isoformat()})
+        client.post("/api/ai/events", json={
+            "event_type": "cattle_out_of_zone", "camera_id": "camera-01", "detected_object": "cow",
+            "confidence": 0.95, "timestamp": "2026-10-31T17:30:00Z",
+        })
+        alert = client.get("/api/alerts").json()["items"][0]
+        client.post(f"/api/alerts/{alert['id']}/acknowledge")
+        farm = client.post("/api/farms", json={"name": "La Esperanza"}).json()
+        client.post(f"/api/farms/{farm['id']}/lots", json={"name": "Corral", "length_meters": 40, "width_meters": 25})
+
+    with TestClient(create_app(settings)) as client:
+        client.app.state.clock = lambda: now
+        token = client.post("/api/auth/login", json={
+            "email": "ana@finca.example", "password": "una-clave-larga",
+        }).json()["access_token"]
+        client.headers.update({"Authorization": f"Bearer {token}"})
+
+        samples = client.get("/api/reports/occupancy", params=window).json()["items"]
+        assert [(item["minute"], item["cattle_inside"]) for item in samples] == [
+            ("2026-10-31T17:00:00Z", 5), ("2026-10-31T17:01:00Z", 6),
+        ]
+        changes = client.get("/api/reports/camera-status", params=window).json()["items"]
+        assert [item["status"] for item in changes] == ["online", "offline"]
+        alerts = client.get("/api/reports/alerts", params=window).json()
+        assert alerts["total"] == 1 and alerts["days"][0]["acknowledged"] == 1
+        assert alerts["avg_minutes_to_acknowledge"] == 0.0
+        assert client.get("/api/reports/events", params=window).json()["days"][0]["high"] == 1
+
+        log = client.get("/api/audit-log", params={"limit": 10}).json()
+        assert [entry["action"] for entry in log["items"]] == [
+            "auth.signed_in", "lot.created", "farm.created", "alert.acknowledged", "auth.registered",
+        ]
+        assert log["items"][1]["detail"] == {"farm_id": farm["id"], "name": "Corral"}
+
+        catalogs = client.get("/api/catalogs").json()["catalogs"]
+        assert [entry["code"] for entry in catalogs["lot_kinds"]] == ["paddock", "stable", "pen", "pasture"]
+        assert catalogs["user_roles"][0]["label_es"] == "Dueño"

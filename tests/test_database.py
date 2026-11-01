@@ -1,3 +1,4 @@
+import importlib
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -311,6 +312,14 @@ def test_the_full_database_follows_the_shared_rules(engine_for):
             "SELECT viewname FROM pg_views WHERE schemaname = current_schema()",
         )).scalars())
         assert {"v_api_events", "v_camera_health", "v_active_herd"} <= views
+        # The backend's report views (0017): present, and each one runs.
+        report_views = importlib.import_module("migrations.versions.0017_report_views").VIEWS
+        assert set(report_views) <= views
+        for view in report_views:
+            # The names come from the migration module, not from any input.
+            connection.execute(text(f"SELECT * FROM {view} LIMIT 1")).all()  # noqa: S608
+        # The catalogs (0014) are seeded.
+        assert connection.execute(text("SELECT count(*) FROM lot_kinds")).scalar_one() == 4
         functions = set(connection.execute(text(
             "SELECT proname FROM pg_proc WHERE proname IN ('prune_events', 'is_valid_zone_outline')",
         )).scalars())
