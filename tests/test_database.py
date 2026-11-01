@@ -21,6 +21,23 @@ def alembic_config(url: str) -> Config:
     return config
 
 
+def reset_postgresql(url: str) -> None:
+    """Empties a throwaway PostgreSQL test database completely.
+
+    Downgrading is not enough: by design the migrations never drop the shared
+    tables on PostgreSQL, so their rows would leak from one test into the next.
+    """
+    from sqlalchemy import create_engine
+
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA public CASCADE"))
+            connection.execute(text("CREATE SCHEMA public"))
+    finally:
+        engine.dispose()
+
+
 def database_settings(url: str) -> Settings:
     # Authentication on: the video analysis endpoints require a signed-in user,
     # and these tests exercise them against a real database.
@@ -181,8 +198,8 @@ def test_postgresql_migrations_and_persistence(event_payload, engine_for):
     # Use an empty test database: the first upgrade applies database/schema.sql to it.
     settings = database_settings(os.environ["TEST_DATABASE_URL"])
     assert settings.storage_name == "postgresql"
+    reset_postgresql(settings.sqlalchemy_url)
     config = alembic_config(settings.sqlalchemy_url)
-    command.downgrade(config, "base")
     command.upgrade(config, "head")
     engine = engine_for(settings.sqlalchemy_url)
     try:
