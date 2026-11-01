@@ -12,6 +12,7 @@ Create Date: 2026-10-29
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0006_zones"
 down_revision = "0005_animals"
@@ -55,7 +56,9 @@ def upgrade() -> None:
     # Present in the shared schema since its migration 0020; added here for
     # databases that predate it and for SQLite.
     if "outline" not in {column["name"] for column in inspector.get_columns("zones")}:
-        op.add_column("zones", sa.Column("outline", sa.JSON))
+        # JSONB on PostgreSQL, as in the shared schema: its validation
+        # function, applied by revision 0012, only accepts jsonb.
+        op.add_column("zones", sa.Column("outline", sa.JSON().with_variant(JSONB(), "postgresql")))
 
 
 def downgrade() -> None:
