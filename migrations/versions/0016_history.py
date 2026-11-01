@@ -8,6 +8,9 @@ free-tier database can hold:
 - camera_status_changes: one row per change, not per report.
 - audit_log: one row per action a person took.
 
+The database repository creates the same tables in its migration 0027, which
+0012 applies first on PostgreSQL, so each one is created only if missing.
+
 Revision ID: 0016_history
 Revises: 0015_catalogs
 Create Date: 2026-10-31
@@ -26,6 +29,16 @@ JSON_DOCUMENT = sa.JSON().with_variant(JSONB(), "postgresql")
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table("occupancy_samples"):
+        _occupancy_samples()
+    if not inspector.has_table("camera_status_changes"):
+        _camera_status_changes()
+    if not inspector.has_table("audit_log"):
+        _audit_log()
+
+
+def _occupancy_samples() -> None:
     op.create_table(
         "occupancy_samples",
         # The primary key leads with camera_id, so it also serves the foreign key.
@@ -40,6 +53,8 @@ def upgrade() -> None:
     # Reports ask for every camera over a time range.
     op.create_index("occupancy_samples_minute_idx", "occupancy_samples", ["minute"])
 
+
+def _camera_status_changes() -> None:
     op.create_table(
         "camera_status_changes",
         sa.Column("id", BIGINT_ID, sa.Identity(always=True), primary_key=True),
@@ -57,6 +72,8 @@ def upgrade() -> None:
         "camera_status_changes_camera_id_changed_at_idx", "camera_status_changes", ["camera_id", "changed_at"],
     )
 
+
+def _audit_log() -> None:
     op.create_table(
         "audit_log",
         sa.Column("id", BIGINT_ID, sa.Identity(always=True), primary_key=True),

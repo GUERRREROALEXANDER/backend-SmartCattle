@@ -26,6 +26,11 @@ CHECKS = {
 
 
 def upgrade() -> None:
+    # The database repository's migration 0025 makes the same change, and
+    # 0012 applies it first on PostgreSQL; then there is nothing left to do.
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("lots")}
+    if {"length_meters", "width_meters"} <= columns:
+        return
     with op.batch_alter_table("lots") as batch:
         batch.add_column(sa.Column("length_meters", sa.Float))
         batch.add_column(sa.Column("width_meters", sa.Float))

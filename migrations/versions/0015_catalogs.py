@@ -15,6 +15,10 @@ enum the API validates against.
 The rows are a frozen copy of app/services/catalog_store.py:CATALOGS as of
 this revision; tests/test_catalogs.py checks the two still agree.
 
+The database repository creates the same tables in its migration 0026, which
+0012 applies first on PostgreSQL. A catalog that already exists is skipped,
+rows included: they came from the same source.
+
 Revision ID: 0015_catalogs
 Revises: 0014_lot_dimensions
 Create Date: 2026-10-31
@@ -72,7 +76,10 @@ ROWS: dict[str, list[tuple[str, str, str, str]]] = {
 }
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
     for name, rows in ROWS.items():
+        if inspector.has_table(name):
+            continue
         table = op.create_table(
             name,
             sa.Column("code", sa.Text, primary_key=True),
