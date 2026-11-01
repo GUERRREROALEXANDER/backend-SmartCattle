@@ -33,6 +33,10 @@ class CameraRow(Base):
     id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
     # The identifier used by the API and the AI service, e.g. "camera-01".
     name: Mapped[str] = mapped_column(Text, unique=True)
+    # Where the camera is reached, with no credentials: those stay on the PC that opens it.
+    source: Mapped[str] = mapped_column(Text, server_default="0")
+    # False once it was removed from the dashboard. The row stays, for its history.
+    active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     # Added by the backend migration; NULL until the AI service reports this camera.
     reported_status: Mapped[str | None] = mapped_column(String(16))
     last_report_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

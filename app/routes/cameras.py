@@ -14,7 +14,14 @@ from app.dependencies import (
     get_zone_store,
     verify_api_key,
 )
-from app.schemas.camera import Camera, CameraList, CameraRecord, CameraStatusReport, effective_status
+from app.schemas.camera import (
+    Camera,
+    CameraList,
+    CameraRecord,
+    CameraSourceReport,
+    CameraStatusReport,
+    effective_status,
+)
 from app.schemas.occupancy import DetectionFrame, OccupancyReport
 from app.schemas.zone import ZoneList
 from app.services.broadcaster import Broadcaster
@@ -81,6 +88,24 @@ def report_camera_status(
     camera = _camera(store.report(camera_id, report, now), now, settings)
     broadcaster.publish("camera.status", camera, now)
     return camera
+
+
+@router.put(
+    "/api/ai/cameras/{camera_id}/source", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(verify_api_key)],
+)
+def register_camera_source(
+    camera_id: CameraId,
+    report: CameraSourceReport,
+    store: CameraStore = Depends(get_camera_store),
+) -> None:
+    """Records where a camera is reached, and whether it is still in use.
+
+    Separate from the status heartbeat, which sends it once instead of several
+    times a minute. It is not returned by GET /api/cameras, which needs no
+    session: a LAN address is nobody else's business.
+    """
+    store.register(camera_id, report)
 
 
 @router.get("/api/ai/cameras/{camera_id}/zones", response_model=ZoneList, dependencies=[Depends(verify_api_key)])

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -41,7 +41,7 @@ def test_report_error_keeps_last_online_time(client, online_report):
 
 def test_stale_report_is_offline(client, online_report):
     client.put(STATUS_URL, json=online_report)
-    client.app.state.clock = lambda: datetime.now(timezone.utc) + timedelta(seconds=61)
+    client.app.state.clock = lambda: datetime.now(UTC) + timedelta(seconds=61)
     camera = client.get("/api/cameras").json()["items"][0]
     assert camera["status"] == "offline"
     assert camera["reported_status"] == "online"
@@ -98,7 +98,7 @@ def test_report_requires_api_key(secured_client, online_report, key, expected):
     (61, CameraStatus.ERROR, CameraStatus.OFFLINE),
 ])
 def test_effective_status(age, reported, expected):
-    now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 6, 12, tzinfo=UTC)
     record = CameraRecord(id="c", reported_status=reported, last_report_at=now - timedelta(seconds=age))
     assert effective_status(record, now, 60) is expected
 
@@ -120,3 +120,91 @@ def test_non_finite_bbox(client):
             '"confidence":0.9,"timestamp":"2026-10-03T15:30:00Z","bbox":[1,2,NaN,4]}')
     response = client.post("/api/ai/events", content=body, headers={"Content-Type": "application/json"})
     assert response.status_code == 422
+
+
+def test_one_camera_can_be_fetched_on_its_own(client, online_report):
+    client.put("/api/ai/cameras/camera-01/status", json=online_report)
+    response = client.get("/api/cameras/camera-01")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "camera-01"
+    assert body["status"] == "online"
+
+
+def test_an_unreported_camera_is_a_404(client):
+    response = client.get("/api/cameras/camera-99")
+    assert response.status_code == 404
+    assert "camera-99" in response.json()["detail"]
+
+
+def test_the_detail_view_expires_a_stale_report(client, online_report):
+    from datetime import timedelta
+
+    client.put("/api/ai/cameras/camera-01/status", json=online_report)
+    moved = client.app.state.clock() + timedelta(seconds=61)
+    client.app.state.clock = lambda: moved
+
+    body = client.get("/api/cameras/camera-01").json()
+    # The same rule as the list view: the backend cannot claim a camera is
+    # online unless the AI service keeps confirming it.
+    assert body["status"] == "offline"
+    assert body["reported_status"] == "online"
+
+
+@pytest.mark.parametrize("camera_id", ["with space", "a" * 65, "camera.01"])
+def test_an_unusable_camera_id_is_rejected(client, camera_id):
+    assert client.get(f"/api/cameras/{camera_id}").status_code == 422
+
+
+def test_a_camera_id_with_a_slash_cannot_reach_the_route(client):
+    # Not a 422: the slash splits the path, so the request is for
+    # /api/cameras/camera/01, which matches no route at all. Worth pinning,
+    # because it is the reason the pattern excludes the character rather than
+    # merely rejecting it.
+    assert client.get("/api/cameras/camera/01").status_code == 404
+
+
+SOURCE_URL = "/api/ai/cameras/cam-1/source"
+
+
+@pytest.fixture
+def camera_store():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db import Base
+    from app.services.camera_store import SqlCameraStore
+
+    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    yield SqlCameraStore(sessionmaker(engine, expire_on_commit=False))
+    engine.dispose()
+
+
+def test_source_is_stored_and_not_public(client):
+    assert client.put(SOURCE_URL, json={"source": "rtsp://192.168.1.50:554/live"}).status_code == 204
+    assert client.app.state.camera_store.registration("cam-1").source == "rtsp://192.168.1.50:554/live"
+    assert "192.168.1.50" not in client.get("/api/cameras").text
+
+
+@pytest.mark.parametrize("source", ["rtsp://admin:secret@192.168.1.50:554/live", "rtsp://admin@cam/live", ""])
+def test_source_with_credentials_is_rejected(client, source):
+    assert client.put(SOURCE_URL, json={"source": source}).status_code == 422
+
+
+def test_source_needs_the_ai_key(secured_client):
+    assert secured_client.put(SOURCE_URL, json={"source": "0"}).status_code == 401
+    accepted = secured_client.put(SOURCE_URL, json={"source": "0"}, headers={"X-API-Key": "test-shared-key"})
+    assert accepted.status_code == 204
+
+
+def test_sql_store_keeps_the_source_and_a_removal_keeps_the_row(camera_store):
+    from app.schemas.camera import CameraSourceReport
+
+    assert camera_store.registration("cam-1") is None
+    camera_store.register("cam-1", CameraSourceReport(source="rtsp://192.168.1.50/live"))
+    assert camera_store.registration("cam-1").model_dump() == {"source": "rtsp://192.168.1.50/live", "active": True}
+    camera_store.register("cam-1", CameraSourceReport(source="rtsp://192.168.1.50/live", active=False))
+    assert camera_store.registration("cam-1").active is False
+    assert camera_store.list() == []  # Registered but never reported: no status to show yet.
