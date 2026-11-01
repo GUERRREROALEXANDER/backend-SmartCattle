@@ -13,7 +13,7 @@ from sqlalchemy import ScalarSelect, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import SessionFactory
+from app.db import SessionFactory, is_unique_violation
 from app.models import CameraRow, FarmRow, LotRow
 from app.schemas.farm import Farm, FarmCreate, FarmUpdate, GeoPoint, Lot, LotCreate, LotKind, LotUpdate
 from app.services.camera_store import camera_row
@@ -250,6 +250,8 @@ class SqlFarmStore:
                 session.flush()
                 return _to_farm(row, 0)
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             raise FarmNameTakenError(data.name) from error
 
     def get_farm(self, farm_id: int) -> Farm | None:
@@ -274,6 +276,8 @@ class SqlFarmStore:
                 session.flush()
                 return _to_farm(row, _count_lots(session, farm_id))
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             raise FarmNameTakenError(data.name) from error
 
     def delete_farm(self, farm_id: int) -> bool:
@@ -299,6 +303,8 @@ class SqlFarmStore:
                 session.flush()
                 return _to_lot(row, data.camera_id)
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             raise LotNameTakenError(data.name) from error
 
     def get_lot(self, lot_id: int) -> Lot | None:
@@ -331,6 +337,8 @@ class SqlFarmStore:
                 camera = None if row.camera_id is None else session.get(CameraRow, row.camera_id)
                 return _to_lot(row, None if camera is None else camera.name)
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             raise LotNameTakenError(data.name) from error
 
     def delete_lot(self, lot_id: int) -> bool:

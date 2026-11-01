@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import SessionFactory
+from app.db import SessionFactory, is_unique_violation
 from app.models import AnimalRow, CameraRow
 from app.schemas.animal import Animal, AnimalCreate, AnimalStatus, AnimalUpdate
 from app.services.camera_store import camera_row
@@ -137,6 +137,8 @@ class SqlAnimalStore:
                 session.flush()
                 return _to_animal(row, data.camera_id)
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             # The primary key decides this, not a prior SELECT: two
             # simultaneous registrations of the same tag both pass a
             # check-then-insert and only one survives.

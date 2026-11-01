@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import SessionFactory
+from app.db import SessionFactory, is_unique_violation
 from app.models import CameraRow, ZoneRow
 from app.schemas.zone import Zone, ZoneCreate, ZonePoint, ZoneUpdate
 from app.services.camera_store import camera_row
@@ -157,6 +157,8 @@ class SqlZoneStore:
                 session.flush()
                 return _to_zone(row, camera_id)
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             raise ZoneNameTakenError(data.name) from error
 
     def update(self, zone_id: int, data: ZoneUpdate) -> Zone | None:

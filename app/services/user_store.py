@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
-from app.db import SessionFactory
+from app.db import SessionFactory, is_unique_violation
 from app.models import UserRow
 from app.schemas.auth import User, UserCreate, UserRole
 from app.schemas.user import UserUpdate
@@ -199,6 +199,8 @@ class SqlUserStore:
                 session.flush()
                 return _to_user(row)
         except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
             # The UNIQUE on email is what decides this, not a prior SELECT.
             # Two simultaneous registrations of the same address both pass a
             # check-then-insert; only one survives the constraint.
