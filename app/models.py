@@ -5,12 +5,14 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Column,
     DateTime,
     Float,
     ForeignKey,
     Identity,
     Integer,
     String,
+    Table,
     Text,
     Uuid,
     func,
@@ -236,6 +238,28 @@ class CameraOccupancyRow(Base):
     cattle_outside: Mapped[int] = mapped_column(Integer)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+def _catalog_table(name: str) -> Table:
+    return Table(
+        name, Base.metadata,
+        Column("code", Text, primary_key=True),
+        Column("label", Text, nullable=False),
+        Column("label_es", Text, nullable=False),
+        Column("description", Text, nullable=False),
+        Column("sort_order", Integer, nullable=False),
+    )
+
+
+#: The reference tables (migration 0015). Plain tables, not mapped classes:
+#: they are read whole and never written by the application.
+CATALOG_TABLES: dict[str, Table] = {
+    name: _catalog_table(name)
+    for name in (
+        "event_types", "severity_levels", "alert_statuses", "camera_statuses",
+        "lot_kinds", "user_roles", "animal_statuses", "video_upload_statuses",
+    )
+}
 
 
 class VideoUploadRow(Base):
