@@ -72,3 +72,7 @@ services:
         value: https://smartcattle-backend.onrender.com
       - key: VITE_DATA_SOURCE
         value: hybrid
+      # live.py on Render (its own repository's Blueprint). Cameras that report their own URL use that instead;
+      # this is where the dashboard's "connect a camera" form goes when none has reported yet.
+      - key: VITE_AI_SERVICE_URL
+        value: https://smartcattle-live.onrender.com
