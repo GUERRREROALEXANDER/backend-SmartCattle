@@ -1,8 +1,10 @@
-# Only app/, migrations/, alembic.ini and requirements.txt go into the image.
+# Only what the API and its migrations read goes into the image. database/schema.sql
+# is applied by migration 0001 to an empty PostgreSQL database.
 # Everything else is excluded so secrets and local state never end up in a layer.
 *
 !app/
 !migrations/
+!database/schema.sql
 !alembic.ini
 !requirements.txt
 **/__pycache__
