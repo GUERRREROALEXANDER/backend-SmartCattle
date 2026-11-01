@@ -3,7 +3,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.dependencies import (
+    AuditTrail,
     Clock,
+    CurrentUser,
     current_user,
     get_animal_store,
     get_clock,
@@ -18,6 +20,7 @@ from app.schemas.animal import (
     AnimalStatus,
     AnimalUpdate,
 )
+from app.schemas.audit import AuditAction
 from app.services.animal_store import AnimalStore, TagAlreadyRegisteredError
 
 router = APIRouter(prefix="/api/animals", tags=["animals"])
@@ -67,6 +70,8 @@ def get_animal(tag: TagParam, store: AnimalStore = Depends(get_animal_store)) ->
 )
 def create_animal(
     data: AnimalCreate,
+    user: CurrentUser,
+    audit: AuditTrail,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
 ) -> Animal:
@@ -77,18 +82,25 @@ def create_animal(
     this is not.
     """
     try:
-        return store.create(data, clock())
+        animal = store.create(data, clock())
     except TagAlreadyRegisteredError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"An animal with tag {data.tag} is already registered",
         ) from error
+    audit.record(
+        AuditAction.ANIMAL_CREATED, actor_id=user.id, actor_email=user.email,
+        target_type="animal", target_id=animal.tag,
+    )
+    return animal
 
 
 @router.patch("/{tag}", response_model=Animal, dependencies=OWNER_ONLY)
 def update_animal(
     tag: TagParam,
     data: AnimalUpdate,
+    user: CurrentUser,
+    audit: AuditTrail,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
 ) -> Animal:
@@ -100,12 +112,19 @@ def update_animal(
 
     The tag is not updatable here; see AnimalUpdate.
     """
-    return _found(store.update(tag, data, clock()), tag)
+    animal = _found(store.update(tag, data, clock()), tag)
+    audit.record(
+        AuditAction.ANIMAL_UPDATED, actor_id=user.id, actor_email=user.email,
+        target_type="animal", target_id=tag, detail={"changed": sorted(data.model_fields_set)},
+    )
+    return animal
 
 
 @router.post("/{tag}/deactivate", response_model=Animal, dependencies=OWNER_ONLY)
 def deactivate_animal(
     tag: TagParam,
+    user: CurrentUser,
+    audit: AuditTrail,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
 ) -> Animal:
@@ -116,9 +135,14 @@ def deactivate_animal(
     apart from one that never existed. The status becomes inactive and the row
     stays.
     """
-    return _found(
+    animal = _found(
         store.update(tag, AnimalUpdate(status=AnimalStatus.INACTIVE), clock()), tag,
     )
+    audit.record(
+        AuditAction.ANIMAL_DEACTIVATED, actor_id=user.id, actor_email=user.email,
+        target_type="animal", target_id=tag,
+    )
+    return animal
 
 
 @router.put(

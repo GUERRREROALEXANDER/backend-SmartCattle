@@ -2,7 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
-from app.dependencies import Clock, CurrentUser, OwnerUser, get_clock, get_farm_store
+from app.dependencies import AuditTrail, Clock, CurrentUser, OwnerUser, get_clock, get_farm_store
+from app.schemas.audit import AuditAction
 from app.schemas.farm import Farm, FarmCreate, FarmList, FarmUpdate, Lot, LotCreate, LotList, LotUpdate
 from app.services.farm_store import FarmHasLotsError, FarmNameTakenError, FarmStore, LotNameTakenError
 from app.services.user_store import StoredUser
@@ -42,6 +43,10 @@ def _owned_farm(store: FarmStore, farm_id: int, user: StoredUser) -> Farm:
     return farm
 
 
+def _changed(data: FarmUpdate | LotUpdate) -> dict[str, object]:
+    return {"changed": sorted(data.model_fields_set)}
+
+
 def _farm_name_conflict(name: str | None) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"You already have a farm named {name}")
 
@@ -57,11 +62,16 @@ def list_farms(_user: CurrentUser, store: Store) -> FarmList:
 
 
 @router.post("/api/farms", response_model=Farm, status_code=status.HTTP_201_CREATED)
-def create_farm(data: FarmCreate, user: OwnerUser, store: Store, clock: Now) -> Farm:
+def create_farm(data: FarmCreate, user: OwnerUser, store: Store, clock: Now, audit: AuditTrail) -> Farm:
     try:
-        return store.create_farm(user.id, data, clock())
+        farm = store.create_farm(user.id, data, clock())
     except FarmNameTakenError as error:
         raise _farm_name_conflict(data.name) from error
+    audit.record(
+        AuditAction.FARM_CREATED, actor_id=user.id, actor_email=user.email,
+        target_type="farm", target_id=farm.id, detail={"name": farm.name},
+    )
+    return farm
 
 
 @router.get("/api/farms/{farm_id}", response_model=Farm)
@@ -70,30 +80,40 @@ def get_farm(farm_id: FarmId, _user: CurrentUser, store: Store) -> Farm:
 
 
 @router.patch("/api/farms/{farm_id}", response_model=Farm)
-def update_farm(farm_id: FarmId, data: FarmUpdate, user: OwnerUser, store: Store, clock: Now) -> Farm:
+def update_farm(
+    farm_id: FarmId, data: FarmUpdate, user: OwnerUser, store: Store, clock: Now, audit: AuditTrail,
+) -> Farm:
     _owned_farm(store, farm_id, user)
     try:
         updated = store.update_farm(farm_id, data, clock())
     except FarmNameTakenError as error:
         raise _farm_name_conflict(data.name) from error
+    audit.record(
+        AuditAction.FARM_UPDATED, actor_id=user.id, actor_email=user.email,
+        target_type="farm", target_id=farm_id, detail=_changed(data),
+    )
     return _farm_or_404(store, farm_id) if updated is None else updated
 
 
 @router.delete("/api/farms/{farm_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_farm(farm_id: FarmId, user: OwnerUser, store: Store) -> None:
+def delete_farm(farm_id: FarmId, user: OwnerUser, store: Store, audit: AuditTrail) -> None:
     """Deletes an empty farm.
 
     Refused while it has lots: the database would cascade them away, and a
     farm's lot layout is hours of drawing on a map that one misclick should
     not be able to erase.
     """
-    _owned_farm(store, farm_id, user)
+    farm = _owned_farm(store, farm_id, user)
     try:
         store.delete_farm(farm_id)
     except FarmHasLotsError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Delete or move the farm's lots before deleting it",
         ) from error
+    audit.record(
+        AuditAction.FARM_DELETED, actor_id=user.id, actor_email=user.email,
+        target_type="farm", target_id=farm_id, detail={"name": farm.name},
+    )
 
 
 @router.get("/api/farms/{farm_id}/lots", response_model=LotList)
@@ -104,12 +124,19 @@ def list_lots(farm_id: FarmId, _user: CurrentUser, store: Store, active: bool | 
 
 
 @router.post("/api/farms/{farm_id}/lots", response_model=Lot, status_code=status.HTTP_201_CREATED)
-def create_lot(farm_id: FarmId, data: LotCreate, user: OwnerUser, store: Store, clock: Now) -> Lot:
+def create_lot(
+    farm_id: FarmId, data: LotCreate, user: OwnerUser, store: Store, clock: Now, audit: AuditTrail,
+) -> Lot:
     _owned_farm(store, farm_id, user)
     try:
-        return store.create_lot(farm_id, data, clock())
+        lot = store.create_lot(farm_id, data, clock())
     except LotNameTakenError as error:
         raise _lot_name_conflict(data.name) from error
+    audit.record(
+        AuditAction.LOT_CREATED, actor_id=user.id, actor_email=user.email,
+        target_type="lot", target_id=lot.id, detail={"farm_id": farm_id, "name": lot.name},
+    )
+    return lot
 
 
 @router.get("/api/lots/{lot_id}", response_model=Lot)
@@ -118,18 +145,28 @@ def get_lot(lot_id: LotId, _user: CurrentUser, store: Store) -> Lot:
 
 
 @router.patch("/api/lots/{lot_id}", response_model=Lot)
-def update_lot(lot_id: LotId, data: LotUpdate, user: OwnerUser, store: Store, clock: Now) -> Lot:
+def update_lot(
+    lot_id: LotId, data: LotUpdate, user: OwnerUser, store: Store, clock: Now, audit: AuditTrail,
+) -> Lot:
     lot = _lot_or_404(store, lot_id)
     _owned_farm(store, lot.farm_id, user)
     try:
         updated = store.update_lot(lot_id, data, clock())
     except LotNameTakenError as error:
         raise _lot_name_conflict(data.name) from error
+    audit.record(
+        AuditAction.LOT_UPDATED, actor_id=user.id, actor_email=user.email,
+        target_type="lot", target_id=lot_id, detail=_changed(data),
+    )
     return _lot_or_404(store, lot_id) if updated is None else updated
 
 
 @router.delete("/api/lots/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_lot(lot_id: LotId, user: OwnerUser, store: Store) -> None:
+def delete_lot(lot_id: LotId, user: OwnerUser, store: Store, audit: AuditTrail) -> None:
     lot = _lot_or_404(store, lot_id)
     _owned_farm(store, lot.farm_id, user)
     store.delete_lot(lot_id)
+    audit.record(
+        AuditAction.LOT_DELETED, actor_id=user.id, actor_email=user.email,
+        target_type="lot", target_id=lot_id, detail={"farm_id": lot.farm_id, "name": lot.name},
+    )

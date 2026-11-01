@@ -3,12 +3,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.dependencies import (
+    AuditTrail,
     Clock,
+    CurrentUser,
     current_user,
     get_clock,
     get_zone_store,
     require_owner,
 )
+from app.schemas.audit import AuditAction
 from app.schemas.zone import Zone, ZoneCreate, ZoneList, ZoneUpdate
 from app.services.zone_store import ZoneNameTakenError, ZoneStore
 
@@ -58,6 +61,8 @@ def get_zone(zone_id: ZoneId, store: ZoneStore = Depends(get_zone_store)) -> Zon
 def create_zone(
     camera_id: CameraIdPath,
     data: ZoneCreate,
+    user: CurrentUser,
+    audit: AuditTrail,
     store: ZoneStore = Depends(get_zone_store),
     clock: Clock = Depends(get_clock),
 ) -> Zone:
@@ -73,18 +78,25 @@ def create_zone(
     either floods the farm with false alerts or stops reporting real escapes.
     """
     try:
-        return store.create(camera_id, data, clock())
+        zone = store.create(camera_id, data, clock())
     except ZoneNameTakenError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Camera {camera_id} already has a zone named {data.name}",
         ) from error
+    audit.record(
+        AuditAction.ZONE_CREATED, actor_id=user.id, actor_email=user.email,
+        target_type="zone", target_id=zone.id, detail={"camera_id": camera_id, "name": zone.name},
+    )
+    return zone
 
 
 @router.patch("/{zone_id}", response_model=Zone, dependencies=OWNER_ONLY)
 def update_zone(
     zone_id: ZoneId,
     data: ZoneUpdate,
+    user: CurrentUser,
+    audit: AuditTrail,
     store: ZoneStore = Depends(get_zone_store),
 ) -> Zone:
     """Partially updates a zone. Owner only.
@@ -92,11 +104,18 @@ def update_zone(
     The geometry is replaced as a whole when sent, because a single corner
     cannot be validated against the others without knowing them.
     """
-    return _found(store.update(zone_id, data), zone_id)
+    zone = _found(store.update(zone_id, data), zone_id)
+    audit.record(
+        AuditAction.ZONE_UPDATED, actor_id=user.id, actor_email=user.email,
+        target_type="zone", target_id=zone_id, detail={"changed": sorted(data.model_fields_set)},
+    )
+    return zone
 
 
 @router.delete("/{zone_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=OWNER_ONLY)
-def delete_zone(zone_id: ZoneId, store: ZoneStore = Depends(get_zone_store)) -> None:
+def delete_zone(
+    zone_id: ZoneId, user: CurrentUser, audit: AuditTrail, store: ZoneStore = Depends(get_zone_store),
+) -> None:
     """Removes a zone. Owner only.
 
     A real delete, unlike animals. A zone is configuration and not history:
@@ -109,3 +128,6 @@ def delete_zone(zone_id: ZoneId, store: ZoneStore = Depends(get_zone_store)) -> 
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"No zone with id {zone_id}",
         )
+    audit.record(
+        AuditAction.ZONE_DELETED, actor_id=user.id, actor_email=user.email, target_type="zone", target_id=zone_id,
+    )

@@ -8,13 +8,16 @@ from app.dependencies import (
     Clock,
     CurrentUser,
     get_app_settings,
+    get_auditor,
     get_clock,
     get_login_throttle,
     get_user_store,
     require_jwt_secret,
 )
+from app.schemas.audit import AuditAction
 from app.schemas.auth import LoginRequest, TokenResponse, User, UserCreate, UserRole
 from app.schemas.user import PasswordChange
+from app.services.audit_log import Auditor
 from app.services.login_throttle import LoginThrottle
 from app.services.user_store import EmailAlreadyRegisteredError, StoredUser, UserStore
 
@@ -45,6 +48,7 @@ def register(
     settings: Settings = Depends(get_app_settings),
     secret: str = Depends(require_jwt_secret),
     clock: Clock = Depends(get_clock),
+    auditor: Auditor = Depends(get_auditor),
 ) -> TokenResponse:
     """Creates an account and signs it in.
 
@@ -60,6 +64,10 @@ def register(
             status_code=status.HTTP_409_CONFLICT,
             detail="That email is already registered",
         ) from error
+    auditor.record(
+        AuditAction.REGISTERED, actor_id=user.id, actor_email=user.email,
+        target_type="user", target_id=user.id, detail={"role": role.value},
+    )
     return _token(user, settings, secret, clock)
 
 
@@ -71,6 +79,7 @@ def login(
     secret: str = Depends(require_jwt_secret),
     throttle: LoginThrottle = Depends(get_login_throttle),
     clock: Clock = Depends(get_clock),
+    auditor: Auditor = Depends(get_auditor),
 ) -> TokenResponse:
     now = clock()
     retry_after = throttle.locked_for(data.email, now)
@@ -90,6 +99,13 @@ def login(
 
     if user is None or not correct or not user.is_active:
         throttle.record_failure(data.email, now)
+        # Recorded with the address typed, which may match no account: a run of
+        # these against one address is what an owner looks for. Attempts the
+        # throttle refuses above are not recorded, so a script hammering the
+        # endpoint cannot grow the table faster than the lockout allows.
+        auditor.record(
+            AuditAction.SIGN_IN_FAILED, actor_id=None if user is None else user.id, actor_email=data.email,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=INVALID_CREDENTIALS,
@@ -98,6 +114,7 @@ def login(
 
     throttle.clear(data.email)
     store.record_login(user.id, now)
+    auditor.record(AuditAction.SIGNED_IN, actor_id=user.id, actor_email=user.email)
     return _token(user.model_copy(update={"last_login_at": now}), settings, secret, clock)
 
 
@@ -113,6 +130,7 @@ def change_password(
     store: UserStore = Depends(get_user_store),
     throttle: LoginThrottle = Depends(get_login_throttle),
     clock: Clock = Depends(get_clock),
+    auditor: Auditor = Depends(get_auditor),
 ) -> None:
     """Replaces the caller's password after checking the current one.
 
@@ -139,3 +157,4 @@ def change_password(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The current password is not correct")
     throttle.clear(user.email)
     store.set_password(user.id, data.new_password, now)
+    auditor.record(AuditAction.PASSWORD_CHANGED, actor_id=user.id, actor_email=user.email)

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.config import Settings
 from app.dependencies import (
+    AuditTrail,
     Clock,
     CurrentUser,
     get_app_settings,
@@ -17,6 +18,7 @@ from app.dependencies import (
     get_video_upload_store,
     require_video_storage,
 )
+from app.schemas.audit import AuditAction
 from app.schemas.auth import UserRole
 from app.schemas.video_upload import (
     MAX_VIDEO_BYTES,
@@ -102,7 +104,7 @@ def start_upload(
 
 @router.post("/{upload_id}/complete", response_model=VideoUpload)
 def complete_upload(
-    upload_id: UUID, user: CurrentUser, store: Store, storage: Storage, hub: Hub, clock: Now,
+    upload_id: UUID, user: CurrentUser, store: Store, storage: Storage, hub: Hub, clock: Now, audit: AuditTrail,
 ) -> VideoUpload:
     """Confirms the file reached the bucket and queues it for the AI service.
 
@@ -141,6 +143,10 @@ def complete_upload(
         ) from error
     assert queued is not None  # noqa: S101
     hub.publish("video.updated", queued.public(), now)
+    audit.record(
+        AuditAction.VIDEO_UPLOADED, actor_id=user.id, actor_email=user.email, target_type="video_upload",
+        target_id=upload_id, detail={"file_name": upload.file_name, "size_bytes": upload.size_bytes},
+    )
     return queued.public()
 
 

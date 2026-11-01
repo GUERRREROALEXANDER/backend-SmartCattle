@@ -23,6 +23,7 @@ from app.core.security import decode_access_token
 from app.schemas.auth import UserRole
 from app.services.alert_store import AlertStore
 from app.services.animal_store import AnimalStore
+from app.services.audit_log import AuditLog, Auditor
 from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
 from app.services.catalog_store import CatalogStore
@@ -129,6 +130,22 @@ def get_catalog_store(request: Request) -> CatalogStore:
     return store
 
 
+def get_audit_log(request: Request) -> AuditLog:
+    log: AuditLog = request.app.state.audit_log
+    return log
+
+
+def get_auditor(
+    request: Request, log: AuditLog = Depends(get_audit_log), clock: Clock = Depends(get_clock),
+) -> Auditor:
+    """The audit log bound to this request.
+
+    The address is the client's as uvicorn resolved it; behind Render's proxy
+    that relies on --proxy-headers, which the Dockerfile sets.
+    """
+    return Auditor(log=log, now=clock(), ip_address=None if request.client is None else request.client.host)
+
+
 def get_login_throttle(request: Request) -> LoginThrottle:
     throttle: LoginThrottle = request.app.state.login_throttle
     return throttle
@@ -228,3 +245,5 @@ def require_owner(user: CurrentUser) -> StoredUser:
 
 
 OwnerUser = Annotated[StoredUser, Depends(require_owner)]
+
+AuditTrail = Annotated[Auditor, Depends(get_auditor)]
