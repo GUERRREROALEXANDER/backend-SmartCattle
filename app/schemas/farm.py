@@ -19,6 +19,7 @@ Longitude = Annotated[float, Field(ge=-180, le=180, allow_inf_nan=False)]
 #: larger than a country.
 Hectares = Annotated[float, Field(gt=0, le=1_000_000, allow_inf_nan=False)]
 SquareMeters = Annotated[float, Field(gt=0, le=100_000_000, allow_inf_nan=False)]
+Meters = Annotated[float, Field(gt=0, le=100_000, allow_inf_nan=False)]
 Capacity = Annotated[int, Field(ge=0, le=100_000)]
 
 
@@ -125,6 +126,29 @@ class FarmList(BaseModel):
     total: int
 
 
+#: How far a declared area may stray from length x width before it is refused.
+#: Loose enough for a figure rounded by hand, tight enough to catch a typo.
+AREA_TOLERANCE = 0.01
+
+
+def _check_dimensions(length: float | None, width: float | None, area: float | None) -> float | None:
+    """The area the lot ends up with, or ValueError.
+
+    Length and width come together: one alone describes no shape. With both,
+    the area follows from them; a declared area must agree with that.
+    """
+    if (length is None) != (width is None):
+        raise ValueError("length_meters and width_meters must be given together")
+    if length is None or width is None:
+        return area
+    derived = length * width
+    if area is not None and abs(area - derived) > derived * AREA_TOLERANCE:
+        raise ValueError(
+            f"area_square_meters ({area:g}) does not match length_meters x width_meters ({derived:g})",
+        )
+    return derived if area is None else area
+
+
 class _LotFields(BaseModel):
     @field_validator("name", mode="before", check_fields=False)
     @classmethod
@@ -145,14 +169,21 @@ class LotCreate(_LotFields):
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={"examples": [{
-            "name": "North paddock", "kind": "paddock", "area_square_meters": 25000,
+            "name": "North paddock", "kind": "paddock", "length_meters": 250, "width_meters": 100,
             "capacity": 40, "camera_id": "camera-01",
         }]},
     )
 
     name: Name
-    kind: LotKind
-    area_square_meters: SquareMeters | None = None
+    kind: LotKind = Field(
+        default=LotKind.PADDOCK,
+        description="Defaults to paddock, so a lot can be registered with nothing but its name.",
+    )
+    area_square_meters: SquareMeters | None = Field(
+        default=None, description="Derived from length x width when those are given.",
+    )
+    length_meters: Meters | None = None
+    width_meters: Meters | None = None
     capacity: Capacity | None = None
     boundary: Boundary | None = None
     camera_id: CameraName | None = Field(
@@ -160,15 +191,27 @@ class LotCreate(_LotFields):
     )
     active: bool = True
 
+    @model_validator(mode="after")
+    def area_matches_dimensions(self) -> Self:
+        self.area_square_meters = _check_dimensions(self.length_meters, self.width_meters, self.area_square_meters)
+        return self
+
 
 class LotUpdate(_LotFields):
-    """A partial update with the same omitted-versus-null rule as FarmUpdate."""
+    """A partial update with the same omitted-versus-null rule as FarmUpdate.
+
+    Length and width are changed together. New dimensions bring their area
+    with them; a new area sent alone clears the dimensions, because a lot
+    whose area no longer equals length x width is not that rectangle any more.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: Name | None = None
     kind: LotKind | None = None
     area_square_meters: SquareMeters | None = None
+    length_meters: Meters | None = None
+    width_meters: Meters | None = None
     capacity: Capacity | None = None
     boundary: Boundary | None = None
     camera_id: CameraName | None = None
@@ -181,13 +224,27 @@ class LotUpdate(_LotFields):
         for required in ("name", "kind", "active"):
             if required in self.model_fields_set and getattr(self, required) is None:
                 raise ValueError(f"{required} cannot be cleared")
+        changed = self.model_fields_set
+        if ("length_meters" in changed) != ("width_meters" in changed):
+            raise ValueError("length_meters and width_meters must be changed together")
+        # Assigning a field marks it as sent, so each assignment below is one
+        # the update really makes.
+        if "length_meters" in changed:
+            area = self.area_square_meters if "area_square_meters" in changed else None
+            derived = _check_dimensions(self.length_meters, self.width_meters, area)
+            if self.length_meters is not None:
+                self.area_square_meters = derived
+        elif "area_square_meters" in changed:
+            self.length_meters = None
+            self.width_meters = None
         return self
 
 
 class Lot(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{
         "id": 1, "farm_id": 1, "name": "North paddock", "kind": "paddock",
-        "area_square_meters": 25000, "capacity": 40, "boundary": None, "camera_id": "camera-01",
+        "area_square_meters": 25000, "length_meters": 250, "width_meters": 100,
+        "capacity": 40, "boundary": None, "camera_id": "camera-01",
         "active": True, "created_at": "2026-10-31T08:00:00Z", "updated_at": "2026-10-31T08:00:00Z",
     }]})
 
@@ -196,6 +253,8 @@ class Lot(BaseModel):
     name: str
     kind: LotKind
     area_square_meters: float | None
+    length_meters: float | None = None
+    width_meters: float | None = None
     capacity: int | None
     boundary: list[GeoPoint] | None
     camera_id: str | None

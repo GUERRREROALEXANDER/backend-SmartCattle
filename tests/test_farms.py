@@ -231,3 +231,77 @@ def test_renaming_a_lot_onto_a_sibling_is_a_conflict(auth_client, owner_headers,
     auth_client.post(f"{FARMS_URL}/{farm['id']}/lots", json={"name": "Pen 2", "kind": "pen"}, headers=owner_headers)
     response = auth_client.patch(f"/api/lots/{lot['id']}", json={"name": "Pen 2"}, headers=owner_headers)
     assert response.status_code == 409
+
+
+# --- A lot with only a name, and lots described by their measurements ---
+
+
+def lots_url(farm):
+    return f"{FARMS_URL}/{farm['id']}/lots"
+
+
+def test_a_lot_needs_nothing_but_a_name(auth_client, owner_headers, farm):
+    response = auth_client.post(lots_url(farm), json={"name": "Lote 1"}, headers=owner_headers)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["kind"] == "paddock"
+    for unknown in ("area_square_meters", "length_meters", "width_meters", "capacity", "boundary", "camera_id"):
+        assert body[unknown] is None
+
+
+def test_the_area_follows_from_length_and_width(auth_client, owner_headers, farm):
+    body = auth_client.post(
+        lots_url(farm), json={"name": "Corral", "length_meters": 40, "width_meters": 25}, headers=owner_headers,
+    ).json()
+    assert (body["length_meters"], body["width_meters"], body["area_square_meters"]) == (40, 25, 1000)
+
+
+def test_a_declared_area_close_to_length_times_width_is_kept(auth_client, owner_headers, farm):
+    body = auth_client.post(lots_url(farm), json={
+        "name": "Corral", "length_meters": 40, "width_meters": 25, "area_square_meters": 1005,
+    }, headers=owner_headers).json()
+    assert body["area_square_meters"] == 1005
+
+
+@pytest.mark.parametrize("dimensions", [
+    {"length_meters": 40},
+    {"width_meters": 25},
+    {"length_meters": 40, "width_meters": 25, "area_square_meters": 2000},
+    {"length_meters": 0, "width_meters": 25},
+    {"length_meters": -1, "width_meters": 25},
+])
+def test_inconsistent_dimensions_are_rejected(auth_client, owner_headers, farm, dimensions):
+    response = auth_client.post(lots_url(farm), json={"name": "Corral", **dimensions}, headers=owner_headers)
+    assert response.status_code == 422
+
+
+def test_new_dimensions_bring_their_area(auth_client, owner_headers, lot):
+    body = auth_client.patch(
+        f"/api/lots/{lot['id']}", json={"length_meters": 100, "width_meters": 50}, headers=owner_headers,
+    ).json()
+    assert (body["length_meters"], body["width_meters"], body["area_square_meters"]) == (100, 50, 5000)
+
+
+def test_a_new_area_alone_clears_the_dimensions(auth_client, owner_headers, farm):
+    created = auth_client.post(
+        lots_url(farm), json={"name": "Corral", "length_meters": 40, "width_meters": 25}, headers=owner_headers,
+    ).json()
+    body = auth_client.patch(
+        f"/api/lots/{created['id']}", json={"area_square_meters": 1200}, headers=owner_headers,
+    ).json()
+    assert (body["length_meters"], body["width_meters"], body["area_square_meters"]) == (None, None, 1200)
+
+
+def test_clearing_the_dimensions_keeps_the_area(auth_client, owner_headers, farm):
+    created = auth_client.post(
+        lots_url(farm), json={"name": "Corral", "length_meters": 40, "width_meters": 25}, headers=owner_headers,
+    ).json()
+    body = auth_client.patch(
+        f"/api/lots/{created['id']}", json={"length_meters": None, "width_meters": None}, headers=owner_headers,
+    ).json()
+    assert (body["length_meters"], body["width_meters"], body["area_square_meters"]) == (None, None, 1000)
+
+
+def test_one_side_cannot_be_changed_alone(auth_client, owner_headers, lot):
+    response = auth_client.patch(f"/api/lots/{lot['id']}", json={"length_meters": 10}, headers=owner_headers)
+    assert response.status_code == 422
