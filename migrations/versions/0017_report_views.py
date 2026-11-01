@@ -11,6 +11,10 @@ Colombian days; the default on Neon is UTC.
 PostgreSQL only. SQLite is the test and local fallback, and nobody points a
 reporting tool at it.
 
+The database repository has the same views as its migration 0028, which 0012
+applies first. CREATE OR REPLACE with identical definitions makes running
+both harmless; tests/test_database.py fails if the two drift apart.
+
 Revision ID: 0017_report_views
 Revises: 0016_history
 Create Date: 2026-10-31
