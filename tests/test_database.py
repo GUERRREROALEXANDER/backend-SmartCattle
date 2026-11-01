@@ -11,6 +11,7 @@ from sqlalchemy import inspect, text
 
 from app.core.config import Settings
 from app.main import create_app
+from app.services.catalog_store import CATALOGS
 from tests.conftest import TEST_JWT_SECRET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -318,8 +319,13 @@ def test_the_full_database_follows_the_shared_rules(engine_for):
         for view in report_views:
             # The names come from the migration module, not from any input.
             connection.execute(text(f"SELECT * FROM {view} LIMIT 1")).all()  # noqa: S608
-        # The catalogs (0014) are seeded.
-        assert connection.execute(text("SELECT count(*) FROM lot_kinds")).scalar_one() == 4
+        # The catalogs, seeded here by the database repository's 0026 through
+        # 0012, hold exactly what the API serves in memory.
+        for name, rows in CATALOGS.items():
+            stored = connection.execute(text(
+                f"SELECT code, label, label_es, description FROM {name} ORDER BY sort_order",  # noqa: S608
+            )).all()
+            assert [tuple(row) for row in stored] == rows, name
         functions = set(connection.execute(text(
             "SELECT proname FROM pg_proc WHERE proname IN ('prune_events', 'is_valid_zone_outline')",
         )).scalars())
@@ -329,6 +335,18 @@ def test_the_full_database_follows_the_shared_rules(engine_for):
             "WHERE table_name = 'zones' AND column_name = 'outline'",
         )).scalar_one()
         assert outline_type == "jsonb"
+
+
+def test_the_report_views_match_the_database_repository():
+    """Its 0028 and our 0017 define the same views, and whichever runs last wins.
+
+    Compared with whitespace collapsed, so indentation inside its DO blocks
+    does not count as a difference.
+    """
+    shared = " ".join((ROOT / "database" / "migrations" / "0028_report_views.sql").read_text("utf-8").split())
+    views = importlib.import_module("migrations.versions.0017_report_views").VIEWS
+    for name, query in views.items():
+        assert f"CREATE OR REPLACE VIEW {name} AS {' '.join(query.split())};" in shared, name
 
 
 class _DriverError(Exception):
