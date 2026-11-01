@@ -11,13 +11,16 @@ from app.dependencies import (
     get_camera_store,
     get_clock,
     get_occupancy_store,
+    get_zone_store,
     verify_api_key,
 )
 from app.schemas.camera import Camera, CameraList, CameraRecord, CameraStatusReport, effective_status
 from app.schemas.occupancy import DetectionFrame, OccupancyReport
+from app.schemas.zone import ZoneList
 from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
 from app.services.occupancy_store import OccupancyStore
+from app.services.zone_store import ZoneStore
 
 router = APIRouter(tags=["cameras"])
 CameraId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
@@ -78,6 +81,20 @@ def report_camera_status(
     camera = _camera(store.report(camera_id, report, now), now, settings)
     broadcaster.publish("camera.status", camera, now)
     return camera
+
+
+@router.get("/api/ai/cameras/{camera_id}/zones", response_model=ZoneList, dependencies=[Depends(verify_api_key)])
+def camera_safe_zones(camera_id: CameraId, store: ZoneStore = Depends(get_zone_store)) -> ZoneList:
+    """The active safe zones of one camera, for the AI service.
+
+    GET /api/zones serves the same data to people, behind a user session the
+    AI service does not have. This one takes its shared key, is limited to one
+    camera and leaves out inactive zones: those are the ones it must ignore.
+    The AI polls it, so a zone drawn in the dashboard reaches the detector
+    without restarting anything.
+    """
+    items = [zone for zone in store.list(camera_id) if zone.active]
+    return ZoneList(items=items, total=len(items))
 
 
 @router.put(
