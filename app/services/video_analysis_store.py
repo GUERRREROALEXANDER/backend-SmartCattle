@@ -110,6 +110,11 @@ class SqlVideoAnalysisStore:
                 alert_count=len(data.alerts), created_at=created_at,
             )
             session.add(row)
+            # Flushed on its own first: without a relationship() between the
+            # two mappers, SQLAlchemy does not promise to insert the parent
+            # before the children, and PostgreSQL checks the foreign key at
+            # once. SQLite, which does not enforce it here, never showed it.
+            session.flush()
             alert_rows = [
                 VideoAnalysisAlertRow(
                     analysis_id=analysis_id, track_id=alert.track_id,
