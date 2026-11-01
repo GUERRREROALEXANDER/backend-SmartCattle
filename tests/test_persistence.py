@@ -351,6 +351,24 @@ def test_farm_rules_hold_against_the_database(tmp_path):
         assert client.get("/api/farms").json()["total"] == 1
 
 
+def test_lot_measurements_survive_a_restart(tmp_path):
+    settings = migrated(tmp_path, "lot-dimensions.db")
+    with TestClient(create_app(settings)) as client:
+        sign_in(client)
+        farm = client.post("/api/farms", json={"name": "La Esperanza"}).json()
+        lots_url = f"/api/farms/{farm['id']}/lots"
+        bare = client.post(lots_url, json={"name": "Lote 1"}).json()
+        measured = client.post(lots_url, json={"name": "Corral", "length_meters": 40, "width_meters": 25}).json()
+        resized = client.patch(f"/api/lots/{measured['id']}", json={"area_square_meters": 1200}).json()
+
+    with TestClient(create_app(settings)) as client:
+        sign_in(client, "otra@finca.example")
+        assert client.get(f"/api/lots/{bare['id']}").json()["kind"] == "paddock"
+        stored = client.get(f"/api/lots/{measured['id']}").json()
+        assert stored == resized
+        assert (stored["length_meters"], stored["width_meters"], stored["area_square_meters"]) == (None, None, 1200)
+
+
 def test_the_event_severity_survives_a_restart(tmp_path, event_payload):
     settings = migrated(tmp_path, "levels.db")
     with TestClient(create_app(settings)) as client:

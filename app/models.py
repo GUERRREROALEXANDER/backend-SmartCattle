@@ -180,6 +180,8 @@ class LotRow(Base):
     name: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)
     area_square_meters: Mapped[float | None] = mapped_column(Float)
+    length_meters: Mapped[float | None] = mapped_column(Float)
+    width_meters: Mapped[float | None] = mapped_column(Float)
     capacity: Mapped[int | None] = mapped_column(Integer)
     boundary: Mapped[list[dict[str, float]] | None] = mapped_column(
         JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),

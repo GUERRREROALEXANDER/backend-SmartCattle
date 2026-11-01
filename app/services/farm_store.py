@@ -211,6 +211,7 @@ def _to_lot(row: LotRow, camera_name: str | None) -> Lot:
     return Lot(
         id=row.id, farm_id=row.farm_id, name=row.name, kind=LotKind(row.kind),
         area_square_meters=row.area_square_meters, capacity=row.capacity,
+        length_meters=row.length_meters, width_meters=row.width_meters,
         boundary=_boundary_points(row.boundary), camera_id=camera_name, active=row.active,
         created_at=_aware(row.created_at), updated_at=_aware(row.updated_at),
     )
@@ -296,6 +297,7 @@ class SqlFarmStore:
                 row = LotRow(
                     farm_id=farm_id, name=data.name, kind=data.kind.value,
                     area_square_meters=data.area_square_meters, capacity=data.capacity,
+                    length_meters=data.length_meters, width_meters=data.width_meters,
                     boundary=_boundary_json(data.boundary), camera_id=self._camera_id(session, data.camera_id),
                     active=data.active, created_at=now, updated_at=now,
                 )
