@@ -283,6 +283,45 @@ def test_an_unmodelled_level_is_derived(tmp_path, engine_for):
         assert listed[0]["level"] == "high"
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL is not set")
+def test_the_full_database_follows_the_shared_rules(engine_for):
+    """The database repository's structural checks, run on shared and backend tables together.
+
+    Its own CI only sees the shared schema. These are the same assertions
+    (its tests 05 and 19) after every backend migration has run.
+    """
+    url = database_settings(os.environ["TEST_DATABASE_URL"]).sqlalchemy_url
+    reset_postgresql(url)
+    command.upgrade(alembic_config(url), "head")
+    with engine_for(url).connect() as connection:
+        # 05: every single-column foreign key leads some index.
+        unindexed = connection.execute(text("""
+            SELECT c.conrelid::regclass::text || '.' || a.attname
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+            WHERE c.contype = 'f' AND array_length(c.conkey, 1) = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_index i WHERE i.indrelid = c.conrelid AND i.indkey[0] = c.conkey[1]
+              )
+            ORDER BY 1
+        """)).scalars().all()
+        assert unindexed == []
+        # 19: what install.sql promises exists after a fresh install.
+        views = set(connection.execute(text(
+            "SELECT viewname FROM pg_views WHERE schemaname = current_schema()",
+        )).scalars())
+        assert {"v_api_events", "v_camera_health", "v_active_herd"} <= views
+        functions = set(connection.execute(text(
+            "SELECT proname FROM pg_proc WHERE proname IN ('prune_events', 'is_valid_zone_outline')",
+        )).scalars())
+        assert functions == {"prune_events", "is_valid_zone_outline"}
+        outline_type = connection.execute(text(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = 'zones' AND column_name = 'outline'",
+        )).scalar_one()
+        assert outline_type == "jsonb"
+
+
 class _DriverError(Exception):
     def __init__(self, message: str, sqlstate: str | None = None) -> None:
         super().__init__(message)
