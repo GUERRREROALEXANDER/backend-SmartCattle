@@ -55,7 +55,9 @@ class EventRow(Base):
     camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
     detected_object: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
-    bbox: Mapped[list[float] | None] = mapped_column("box", JSON().with_variant(JSONB, "postgresql"))
+    bbox: Mapped[list[float] | None] = mapped_column(
+        "box", JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+    )
     timestamp: Mapped[datetime] = mapped_column("detected_at", DateTime(timezone=True))
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -137,8 +139,12 @@ class ZoneRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Optional polygon, added to the shared schema by its migration 0020. When
     # present it defines the zone and the rectangle is its bounding box.
+    #
+    # none_as_null: without it None is written as the JSON value null, which
+    # the shared CHECK (is_valid_zone_outline) rejects, so every rectangle-only
+    # zone failed on PostgreSQL.
     outline: Mapped[list[dict[str, float]] | None] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"),
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
     )
 
 
@@ -175,7 +181,9 @@ class LotRow(Base):
     kind: Mapped[str] = mapped_column(Text)
     area_square_meters: Mapped[float | None] = mapped_column(Float)
     capacity: Mapped[int | None] = mapped_column(Integer)
-    boundary: Mapped[list[dict[str, float]] | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
+    boundary: Mapped[list[dict[str, float]] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
+    )
     camera_id: Mapped[int | None] = mapped_column(BIGINT_ID, ForeignKey("cameras.id", ondelete="SET NULL"))
     active: Mapped[bool] = mapped_column(Boolean, server_default=func.true())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
