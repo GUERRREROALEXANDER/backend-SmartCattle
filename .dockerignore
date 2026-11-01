@@ -5,6 +5,7 @@
 !app/
 !migrations/
 !database/schema.sql
+!database/migrations/
 !alembic.ini
 !requirements.txt
 **/__pycache__
