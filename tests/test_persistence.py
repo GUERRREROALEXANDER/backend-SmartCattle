@@ -5,20 +5,33 @@ through the migrations, which is the only place the column mapping, the
 constraints and the timezone handling are all exercised at once.
 """
 
+import os
+
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from tests.test_database import alembic_config, database_settings, sign_in
+from tests.test_database import alembic_config, database_settings, reset_postgresql, sign_in
 
 RECTANGLE = {"name": "Safe zone", "x_min": 0.1, "y_min": 0.1, "x_max": 0.9, "y_max": 0.9}
 
 
 def migrated(tmp_path, name: str):
+    """A freshly migrated database: SQLite by default, PostgreSQL when TEST_DATABASE_URL is set.
+
+    SQLite does not enforce what PostgreSQL does -- row locks, SKIP LOCKED,
+    foreign keys to non-unique columns, timezone round trips -- so CI runs
+    this module against PostgreSQL too. That database is rebuilt for every
+    test, so point it at a throwaway database only.
+    """
     from alembic import command
 
-    url = f"sqlite:///{(tmp_path / name).as_posix()}"
-    command.upgrade(alembic_config(url), "head")
-    return database_settings(url)
+    url = os.getenv("TEST_DATABASE_URL") or f"sqlite:///{(tmp_path / name).as_posix()}"
+    settings = database_settings(url)
+    config = alembic_config(settings.sqlalchemy_url)
+    if settings.storage_name == "postgresql":
+        reset_postgresql(settings.sqlalchemy_url)
+    command.upgrade(config, "head")
+    return settings
 
 
 def test_an_account_survives_a_restart(tmp_path):
@@ -109,7 +122,8 @@ def test_a_zone_survives_a_restart_with_its_polygon(tmp_path):
 
     with TestClient(create_app(settings)) as client:
         sign_in(client, "otra@finca.example")
-        zone = client.get("/api/zones").json()["items"][0]
+        # Filtered: on PostgreSQL the shared schema seeds a "Main camera" zone too.
+        zone = client.get("/api/zones", params={"camera_id": "camera-01"}).json()["items"][0]
         assert zone["camera_id"] == "camera-01"
         # The polygon round-trips through JSON, which is where a column mapped
         # as text rather than JSON would surface.
@@ -127,7 +141,9 @@ def test_two_cameras_keep_their_own_zone_across_a_restart(tmp_path):
         sign_in(client, "otra@finca.example")
         # UNIQUE (camera_id, name) held: the same name twice is allowed across
         # cameras, and the constraint is in the database and not in Python.
-        assert client.get("/api/zones").json()["total"] == 2
+        # Compared by camera: on PostgreSQL the shared schema seeds a "Main camera" zone too.
+        cameras = [zone["camera_id"] for zone in client.get("/api/zones").json()["items"]]
+        assert sorted(camera for camera in cameras if camera != "Main camera") == ["camera-01", "camera-02"]
         assert client.get(
             "/api/zones", params={"camera_id": "camera-02"},
         ).json()["total"] == 1
