@@ -120,7 +120,7 @@ In PowerShell, use `$env:PORT` for an environment variable. Without `DATABASE_UR
 
 ## Database
 
-Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events, cameras and video analyses are stored in PostgreSQL. The shared schema is owned by the [database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle); `database/schema.sql` and `database/migrations/` are copies of it (commit `e55236a`). The application never creates tables at startup. `alembic upgrade head`:
+Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events, cameras and video analyses are stored in PostgreSQL. The shared schema is owned by the [database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle); `database/schema.sql` and `database/migrations/` are copies of it (commit `6d97845`). The application never creates tables at startup. `alembic upgrade head`:
 
 1. `0001_shared_schema` applies `database/schema.sql` only if the database has no `cameras` table yet. An existing shared database is left as it is.
 2. `0002_camera_status` adds the nullable camera status columns the backend needs to `cameras`: `reported_status`, `last_report_at`, `last_online_at`, `last_error`, `frame_width`, `frame_height`, `fps` and `stream_url`.
