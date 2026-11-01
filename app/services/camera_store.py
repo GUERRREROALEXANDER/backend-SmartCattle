@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionFactory
 from app.models import CameraRow, CameraStatusChangeRow
-from app.schemas.camera import CameraRecord, CameraStatus, CameraStatusReport, apply_report
+from app.schemas.camera import (
+    CameraRecord,
+    CameraRegistration,
+    CameraSourceReport,
+    CameraStatus,
+    CameraStatusReport,
+    apply_report,
+)
 from app.schemas.report import CameraStatusChange
 
 # Module-level alias: inside the store classes `list` names their method.
@@ -26,6 +33,10 @@ class CameraStore(Protocol):
     def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord: ...
 
     def list(self) -> list[CameraRecord]: ...
+
+    def register(self, camera_id: str, report: CameraSourceReport) -> None: ...
+
+    def registration(self, camera_id: str) -> CameraRegistration | None: ...
 
     def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
         """Changes in [start, end), oldest first."""
@@ -55,6 +66,7 @@ class InMemoryCameraStore:
     def __init__(self) -> None:
         self._cameras: dict[str, CameraRecord] = {}
         self._changes: Changes = []
+        self._registrations: dict[str, CameraRegistration] = {}
         self._lock = Lock()
 
     def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
@@ -69,6 +81,14 @@ class InMemoryCameraStore:
     def list(self) -> list[CameraRecord]:
         with self._lock:
             return [self._cameras[key] for key in sorted(self._cameras)]
+
+    def register(self, camera_id: str, report: CameraSourceReport) -> None:
+        with self._lock:
+            self._registrations[camera_id] = CameraRegistration(source=report.source, active=report.active)
+
+    def registration(self, camera_id: str) -> CameraRegistration | None:
+        with self._lock:
+            return self._registrations.get(camera_id)
 
     def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
         with self._lock:
@@ -146,6 +166,17 @@ class SqlCameraStore:
         query = _reported_rows().order_by(CameraRow.name)
         with self._sessions() as session:
             return [_to_record(row) for row in session.scalars(query)]
+
+    def register(self, camera_id: str, report: CameraSourceReport) -> None:
+        with self._sessions.begin() as session:
+            row = camera_row(session, camera_id, lock=True)
+            row.source, row.active = report.source, report.active
+
+    def registration(self, camera_id: str) -> CameraRegistration | None:
+        query = select(CameraRow).where(CameraRow.name == camera_id)
+        with self._sessions() as session:
+            row = session.scalars(query).first()
+            return None if row is None else CameraRegistration(source=row.source, active=row.active)
 
     def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
         query = (

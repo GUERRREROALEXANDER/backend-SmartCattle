@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from enum import StrEnum
+from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
@@ -55,6 +56,32 @@ class CameraStatusReport(BaseModel):
         if self.error is not None and self.status is not CameraStatus.ERROR:
             raise ValueError("error is only allowed when status is error")
         return self
+
+
+class CameraSourceReport(BaseModel):
+    """Where one camera is reached, sent by the AI service when the camera is added, restored or removed."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"source": "rtsp://192.168.1.50:554/live", "active": True}]},
+    )
+
+    source: str = Field(min_length=1, max_length=500, description="Webcam index or stream URL, without credentials")
+    active: bool = Field(default=True, description="False when the camera was removed")
+
+    @field_validator("source")
+    @classmethod
+    def no_credentials(cls, value: str) -> str:
+        # Passwords stay on the PC that opens the camera; the database never holds one.
+        authority = urlsplit(value).netloc
+        if "@" in authority:
+            raise ValueError("source must not contain credentials")
+        return value
+
+
+class CameraRegistration(BaseModel):
+    source: str
+    active: bool
 
 
 class CameraRecord(BaseModel):

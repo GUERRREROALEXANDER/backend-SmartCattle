@@ -162,3 +162,49 @@ def test_a_camera_id_with_a_slash_cannot_reach_the_route(client):
     # because it is the reason the pattern excludes the character rather than
     # merely rejecting it.
     assert client.get("/api/cameras/camera/01").status_code == 404
+
+
+SOURCE_URL = "/api/ai/cameras/cam-1/source"
+
+
+@pytest.fixture
+def camera_store():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db import Base
+    from app.services.camera_store import SqlCameraStore
+
+    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    yield SqlCameraStore(sessionmaker(engine, expire_on_commit=False))
+    engine.dispose()
+
+
+def test_source_is_stored_and_not_public(client):
+    assert client.put(SOURCE_URL, json={"source": "rtsp://192.168.1.50:554/live"}).status_code == 204
+    assert client.app.state.camera_store.registration("cam-1").source == "rtsp://192.168.1.50:554/live"
+    assert "192.168.1.50" not in client.get("/api/cameras").text
+
+
+@pytest.mark.parametrize("source", ["rtsp://admin:secret@192.168.1.50:554/live", "rtsp://admin@cam/live", ""])
+def test_source_with_credentials_is_rejected(client, source):
+    assert client.put(SOURCE_URL, json={"source": source}).status_code == 422
+
+
+def test_source_needs_the_ai_key(secured_client):
+    assert secured_client.put(SOURCE_URL, json={"source": "0"}).status_code == 401
+    accepted = secured_client.put(SOURCE_URL, json={"source": "0"}, headers={"X-API-Key": "test-shared-key"})
+    assert accepted.status_code == 204
+
+
+def test_sql_store_keeps_the_source_and_a_removal_keeps_the_row(camera_store):
+    from app.schemas.camera import CameraSourceReport
+
+    assert camera_store.registration("cam-1") is None
+    camera_store.register("cam-1", CameraSourceReport(source="rtsp://192.168.1.50/live"))
+    assert camera_store.registration("cam-1").model_dump() == {"source": "rtsp://192.168.1.50/live", "active": True}
+    camera_store.register("cam-1", CameraSourceReport(source="rtsp://192.168.1.50/live", active=False))
+    assert camera_store.registration("cam-1").active is False
+    assert camera_store.list() == []  # Registered but never reported: no status to show yet.
