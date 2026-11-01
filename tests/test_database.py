@@ -281,3 +281,48 @@ def test_an_unmodelled_level_is_derived(tmp_path, engine_for):
         listed = client.get("/api/events").json()["items"]
         assert len(listed) == 1
         assert listed[0]["level"] == "high"
+
+
+class _DriverError(Exception):
+    def __init__(self, message: str, sqlstate: str | None = None) -> None:
+        super().__init__(message)
+        if sqlstate is not None:
+            self.sqlstate = sqlstate
+
+
+@pytest.mark.parametrize("original,duplicate", [
+    (_DriverError("duplicate key", "23505"), True),
+    (_DriverError("violates check constraint", "23514"), False),
+    (_DriverError("violates foreign key constraint", "23503"), False),
+    (_DriverError("UNIQUE constraint failed: farms.name"), True),
+    (_DriverError("CHECK constraint failed: zones_area_check"), False),
+    (_DriverError("FOREIGN KEY constraint failed"), False),
+])
+def test_only_a_duplicate_is_reported_as_one(original, duplicate):
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db import is_unique_violation
+
+    assert is_unique_violation(IntegrityError("INSERT ...", {}, original)) is duplicate
+
+
+def test_a_rule_violation_is_not_disguised_as_a_duplicate(tmp_path, engine_for):
+    """A CHECK the request validation does not cover surfaces as an error, not a 409."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db import create_session_factory
+    from app.schemas.zone import ZoneCreate
+    from app.services.zone_store import SqlZoneStore
+
+    url = f"sqlite:///{(tmp_path / 'rules.db').as_posix()}"
+    command.upgrade(alembic_config(url), "head")
+    store = SqlZoneStore(create_session_factory(engine_for(url)))
+    # Built without validation, as a store caller could; the database's
+    # zones_area_check is what refuses it.
+    inverted = ZoneCreate.model_construct(
+        name="Inverted", x_min=0.9, y_min=0.1, x_max=0.1, y_max=0.9, outline=None, active=True,
+    )
+    with pytest.raises(IntegrityError):
+        store.create("camera-01", inverted, datetime.now(UTC))
