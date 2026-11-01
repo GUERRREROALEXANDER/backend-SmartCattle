@@ -120,13 +120,18 @@ In PowerShell, use `$env:PORT` for an environment variable. Without `DATABASE_UR
 
 ## Database
 
-Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events, cameras and video analyses are stored in PostgreSQL. The shared schema is owned by the [database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle); `database/schema.sql` is a copy of it (commit `baa9ef4`). The application never creates tables at startup. `alembic upgrade head` does three things:
+Without `DATABASE_URL` everything is kept in memory and lost on restart. With it, events, cameras and video analyses are stored in PostgreSQL. The shared schema is owned by the [database repository](https://github.com/walterjojoa/BASEDATOSSmartCattle); `database/schema.sql` and `database/migrations/` are copies of it (commit `e55236a`). The application never creates tables at startup. `alembic upgrade head`:
 
 1. `0001_shared_schema` applies `database/schema.sql` only if the database has no `cameras` table yet. An existing shared database is left as it is.
 2. `0002_camera_status` adds the nullable camera status columns the backend needs to `cameras`: `reported_status`, `last_report_at`, `last_online_at`, `last_error`, `frame_width`, `frame_height`, `fps` and `stream_url`.
-3. `0003_video_analyses` creates the backend-owned `video_analyses` and `video_analysis_alerts` tables. It does not alter any existing table.
+3. `0003`–`0010` create the backend-owned tables: `video_analyses`, `video_analysis_alerts`, `farms`, `lots`, `security_alerts`, `camera_occupancy` and `video_uploads`, and make sure `users`, `animals` and `zones` exist.
+4. `0011` and `0012` complete the shared schema: `schema.sql` describes its tables, but its indexes, views (`v_api_events`, `v_camera_health`, `v_active_herd`), comments, the `prune_events` retention function and later columns arrived as the database repository's numbered migrations. `0012` applies them all; each is safe to run twice, so on a database that already has them it changes nothing.
 
-Alembic also creates its own `alembic_version` table. `alembic downgrade base` removes the video analysis tables and status columns; the shared tables and their rows stay.
+A fresh PostgreSQL database ends with 14 tables, 3 views and 47 indexes, the same as the shared production database. CI checks this on every push: the persistence tests run against PostgreSQL there, not only SQLite.
+
+Alembic also creates its own `alembic_version` table. `alembic downgrade base` removes the backend-owned tables and the status columns; the shared tables and their rows stay.
+
+When the database repository adds a migration, copy it into `database/migrations/` and update the commit above.
 
 Local PostgreSQL (replace the placeholders; never commit real credentials):
 
