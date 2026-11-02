@@ -309,6 +309,7 @@ socket.onmessage = ({ data }) => {
 | `alert.created` | the `Alert` | That detection raised a security alert |
 | `alert.updated` | the `Alert` | Someone acknowledged or resolved an alert |
 | `camera.status` | the `Camera` | The AI service reported a camera's state |
+| `camera.removed` | `{id}` | A camera was removed from the dashboard |
 | `occupancy.updated` | `{camera_id, cattle_inside, cattle_outside, observed_at, received_at}` | The AI reported a newer head count |
 | `detections` | `{camera_id, observed_at, detections: [{track_id, label, confidence, bbox, inside_zone}]}` | That count carried boxes; `bbox` is `[x1, y1, x2, y2]` from 0 to 1, so the video overlay and the 3D view scale it to their own size and can flash `inside_zone: false` animals |
 | `video.updated` | the `VideoUpload` | An upload was queued, claimed, completed or failed |

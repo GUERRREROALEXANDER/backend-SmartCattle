@@ -105,6 +105,23 @@ def test_a_camera_report_is_pushed(auth_client, owner):
     assert message["data"]["id"] == "camera-01"
 
 
+def test_a_removed_camera_is_announced_and_its_late_reports_are_not_pushed(auth_client, owner):
+    status_url, source_url = "/api/ai/cameras/cam-1/status", "/api/ai/cameras/cam-1/source"
+    report = {"frame_width": 640, "frame_height": 360, "fps": 10, "observed_at": "2026-10-31T15:30:00Z"}
+    with auth_client.websocket_connect(LIVE_URL) as socket:
+        signed_in(socket, owner["access_token"])
+        auth_client.put(source_url, json={"source": "0", "active": False})
+        removed = socket.receive_json()
+        auth_client.put(status_url, json={**report, "status": "offline"})
+        auth_client.put(source_url, json={"source": "0"})
+        auth_client.put(status_url, json={**report, "status": "online"})
+        next_push = socket.receive_json()
+    assert removed["type"] == "camera.removed"
+    assert removed["data"] == {"id": "cam-1"}
+    # The offline report came while it was removed: only the one after adding it again arrives.
+    assert (next_push["type"], next_push["data"]["reported_status"]) == ("camera.status", "online")
+
+
 def test_closing_the_socket_unsubscribes(auth_client, owner):
     with auth_client.websocket_connect(LIVE_URL) as socket:
         signed_in(socket, owner["access_token"])
