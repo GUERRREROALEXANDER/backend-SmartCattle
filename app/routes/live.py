@@ -12,6 +12,7 @@ Protocol:
 import asyncio
 import json
 import logging
+from collections import Counter
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -19,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.dependencies import Clock, user_for_token
+from app.guard import client_address
 from app.services.broadcaster import Broadcaster, Subscription, envelope
 from app.services.user_store import StoredUser, UserStore
 
@@ -27,6 +29,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["live"])
 
 AUTH_TIMEOUT_SECONDS = 5.0
+
+#: Each open socket holds memory and receives every broadcast. A person has a few tabs; a loop has thousands.
+MAX_SOCKETS = 200
+MAX_SOCKETS_PER_ADDRESS = 20
+CLOSE_TRY_AGAIN_LATER = 1013
 
 #: Application close codes (4000-4999). Mirroring HTTP keeps them obvious.
 CLOSE_UNAUTHORIZED = 4401
@@ -78,6 +85,13 @@ async def live(websocket: WebSocket) -> None:
     settings: Settings = websocket.app.state.settings
     clock: Clock = websocket.app.state.clock
     broadcaster: Broadcaster = websocket.app.state.broadcaster
+    sockets: Counter[str] = websocket.app.state.live_sockets
+    peer = websocket.client.host if websocket.client else "unknown"
+    address = client_address(websocket.headers, peer, settings.trust_proxy_headers)
+    if sockets.total() >= MAX_SOCKETS or sockets[address] >= MAX_SOCKETS_PER_ADDRESS:
+        await websocket.close(code=CLOSE_TRY_AGAIN_LATER, reason="Too many connections")
+        return
+    sockets[address] += 1
     try:
         user = await _authenticate(websocket, settings, clock)
         if user is None:
@@ -99,3 +113,7 @@ async def live(websocket: WebSocket) -> None:
                     logger.info("Live client fell behind", extra={"dropped_messages": subscription.dropped})
     except WebSocketDisconnect:
         return
+    finally:
+        sockets[address] -= 1
+        if sockets[address] <= 0:
+            del sockets[address]
