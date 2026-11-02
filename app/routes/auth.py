@@ -56,7 +56,13 @@ def register(
     and there is no other channel to grant it. Every account after it is a
     worker; an owner promotes one through PATCH /api/users/{id}.
     """
-    role = UserRole.OWNER if store.count() == 0 else UserRole.WORKER
+    first = store.count() == 0
+    if not first and not settings.public_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is closed; ask the farm's owner for an account",
+        )
+    role = UserRole.OWNER if first else UserRole.WORKER
     try:
         user = store.create(data, role, clock())
     except EmailAlreadyRegisteredError as error:

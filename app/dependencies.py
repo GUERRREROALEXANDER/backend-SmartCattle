@@ -226,6 +226,30 @@ def user_for_token(token: str, secret: str, store: UserStore, now: datetime) -> 
     return user
 
 
+def signed_in_to_read(
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+    store: UserStore = Depends(get_user_store),
+    clock: Clock = Depends(get_clock),
+) -> None:
+    """Closes the reads that were left public, where the deployment asks for it.
+
+    Read from the header and not through bearer_scheme: this applies per deployment, so the OpenAPI document should
+    keep describing each route's own rule. The AI service's routes have their key.
+    """
+    if not settings.require_auth_for_reads or request.method != "GET" or request.url.path.startswith("/api/ai/"):
+        return
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    secret = settings.jwt_secret
+    if scheme.lower() != "bearer" or not token or secret is None or \
+            user_for_token(token, secret.get_secret_value(), store, clock()) is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 CurrentUser = Annotated[StoredUser, Depends(current_user)]
 
 

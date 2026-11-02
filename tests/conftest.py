@@ -1,3 +1,8 @@
+import os
+
+# Tests register and sign in far more than any person; test_guard.py turns the limits on where they are the subject.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
