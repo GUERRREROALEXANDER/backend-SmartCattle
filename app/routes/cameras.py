@@ -86,7 +86,10 @@ def report_camera_status(
     # from it must agree, or a fresh report could come back already offline.
     now = clock()
     camera = _camera(store.report(camera_id, report, now), now, settings)
-    broadcaster.publish("camera.status", camera, now)
+    # A removed camera can still have a report on its way; it must not come back on anyone's screen.
+    registration = store.registration(camera_id)
+    if registration is None or registration.active:
+        broadcaster.publish("camera.status", camera, now)
     return camera
 
 
@@ -98,6 +101,8 @@ def register_camera_source(
     camera_id: CameraId,
     report: CameraSourceReport,
     store: CameraStore = Depends(get_camera_store),
+    broadcaster: Broadcaster = Depends(get_broadcaster),
+    clock: Clock = Depends(get_clock),
 ) -> None:
     """Records where a camera is reached, and whether it is still in use.
 
@@ -106,6 +111,8 @@ def register_camera_source(
     session: a LAN address is nobody else's business.
     """
     store.register(camera_id, report)
+    if not report.active:
+        broadcaster.publish("camera.removed", {"id": camera_id}, clock())
 
 
 @router.get("/api/ai/cameras/{camera_id}/zones", response_model=ZoneList, dependencies=[Depends(verify_api_key)])
