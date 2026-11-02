@@ -208,3 +208,23 @@ def test_sql_store_keeps_the_source_and_a_removal_keeps_the_row(camera_store):
     camera_store.register("cam-1", CameraSourceReport(source="rtsp://192.168.1.50/live", active=False))
     assert camera_store.registration("cam-1").active is False
     assert camera_store.list() == []  # Registered but never reported: no status to show yet.
+
+
+def test_a_removed_camera_leaves_the_list_and_returns_when_added_again(client, online_report):
+    client.put("/api/ai/cameras/cam-1/status", json=online_report)
+    assert [item["id"] for item in client.get("/api/cameras").json()["items"]] == ["cam-1"]
+    client.put(SOURCE_URL, json={"source": "rtsp://192.168.1.50/live", "active": False})
+    assert client.get("/api/cameras").json()["items"] == []
+    assert client.get("/api/cameras/cam-1").status_code == 404
+    client.put(SOURCE_URL, json={"source": "rtsp://192.168.1.50/live"})
+    assert [item["id"] for item in client.get("/api/cameras").json()["items"]] == ["cam-1"]
+
+
+def test_sql_store_leaves_a_removed_camera_out_of_the_list(camera_store):
+    from app.schemas.camera import CameraSourceReport, CameraStatusReport
+
+    at = datetime(2026, 11, 1, tzinfo=UTC)
+    camera_store.report("cam-1", CameraStatusReport(status="online", observed_at=at), at)
+    assert [item.id for item in camera_store.list()] == ["cam-1"]
+    camera_store.register("cam-1", CameraSourceReport(source="0", active=False))
+    assert camera_store.list() == []
