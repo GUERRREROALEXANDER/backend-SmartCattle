@@ -114,3 +114,10 @@ def test_closing_the_socket_unsubscribes(auth_client, owner):
     with auth_client.websocket_connect(LIVE_URL) as socket:
         signed_in(socket, owner["access_token"])
         assert auth_client.app.state.broadcaster.subscriber_count == 1
+
+
+def test_the_server_can_upgrade_to_websockets():
+    """TestClient does not need this library, but uvicorn does: without it /ws/live is a 404 in production."""
+    import importlib.util
+
+    assert importlib.util.find_spec("websockets") is not None
