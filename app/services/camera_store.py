@@ -80,7 +80,8 @@ class InMemoryCameraStore:
 
     def list(self) -> list[CameraRecord]:
         with self._lock:
-            return [self._cameras[key] for key in sorted(self._cameras)]
+            removed = {key for key, item in self._registrations.items() if not item.active}
+            return [self._cameras[key] for key in sorted(self._cameras) if key not in removed]
 
     def register(self, camera_id: str, report: CameraSourceReport) -> None:
         with self._lock:
@@ -113,11 +114,13 @@ def _reported_rows() -> Select[CameraRow]:
     database/schema.sql, and the ones camera_row() creates the first time an
     event names a camera. Both status columns stay NULL there, and a camera
     with no status cannot be described by CameraRecord, so it is left out
-    rather than reported as a guess.
+    rather than reported as a guess. A camera removed from the dashboard is
+    left out too; its row stays because its history points at it.
     """
     return select(CameraRow).where(
         CameraRow.last_report_at.is_not(None),
         CameraRow.reported_status.is_not(None),
+        CameraRow.active.is_(True),
     )
 
 

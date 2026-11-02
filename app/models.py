@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -36,7 +37,7 @@ class CameraRow(Base):
     # Where the camera is reached, with no credentials: those stay on the PC that opens it.
     source: Mapped[str] = mapped_column(Text, server_default="0")
     # False once it was removed from the dashboard. The row stays, for its history.
-    active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    active: Mapped[bool] = mapped_column(Boolean, server_default=true())
     # Added by the backend migration; NULL until the AI service reports this camera.
     reported_status: Mapped[str | None] = mapped_column(String(16))
     last_report_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
