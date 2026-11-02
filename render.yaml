@@ -7,10 +7,13 @@ services:
   - type: web
     name: smartcattle-backend
     runtime: python
-    plan: free
+    # Free instances run on a fraction of a CPU and can restart at any moment; this one must stay up.
+    plan: starter
+    # A commit whose tests fail never reaches the running service.
+    autoDeployTrigger: checksPass
     buildCommand: pip install -r requirements.txt
     # Migrations run on every deploy before the API starts.
-    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --ws-max-size 65536 --timeout-keep-alive 20 --no-server-header
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -28,6 +31,17 @@ services:
       # there is no session table to consult.
       - key: JWT_SECRET
         generateValue: true
+      # This address is on the internet. The first account is the owner, who creates the others
+      # (POST /api/users); set the two below to "true" only to open the API again.
+      - key: PUBLIC_REGISTRATION
+        value: "false"
+      - key: REQUIRE_AUTH_FOR_READS
+        value: "true"
+      - key: API_DOCS_ENABLED
+        value: "false"
+      # Render and Cloudflare are the proxy here, so these headers are theirs and not the client's.
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
       - key: ACCESS_TOKEN_MINUTES
         value: "60"
       - key: ALLOWED_ORIGINS
@@ -58,8 +72,23 @@ services:
     runtime: static
     repo: https://github.com/GUERRREROALEXANDER/fronted-SmartCattle
     branch: main
+    autoDeployTrigger: checksPass
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      # https: and wss: because a camera's AI service can report any public address (a tunnel, another server).
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     routes:
       # Client-side routes (/live, /cameras, ...) are served by index.html.
       - type: rewrite
