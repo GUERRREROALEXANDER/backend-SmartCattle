@@ -12,9 +12,9 @@ from statistics import fmean
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.core.time_window import DEFAULT_TIME_ZONE, time_zone, window
+from app.core.time_window import DEFAULT_TIME_ZONE, day_window, time_zone, window
 from app.dependencies import (
     Clock,
     CurrentUser,
@@ -33,12 +33,14 @@ from app.schemas.report import (
     AlertDay,
     AlertReport,
     CameraStatusHistory,
+    DailyReport,
     EventDay,
     EventReport,
     OccupancyHistory,
 )
 from app.services.alert_store import AlertStore
 from app.services.camera_store import CameraStore
+from app.services.daily_report import DailyReportBuilder
 from app.services.detection_log_store import DetectionLogStore
 from app.services.event_store import EventStore
 from app.services.occupancy_store import OccupancyStore
@@ -48,6 +50,8 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 Now = Annotated[Clock, Depends(get_clock)]
 CameraFilter = Annotated[str | None, Query(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
 TimeZoneName = Annotated[str, Query(max_length=64, description="IANA time zone the days are cut in")]
+#: Nothing predates it, and a date near year 1 overflows when converted to UTC.
+FIRST_REPORTABLE_DAY = date(2020, 1, 1)
 
 
 @router.get("/occupancy", response_model=OccupancyHistory)
@@ -80,6 +84,37 @@ def detection_history(
     span = window(start, end, clock())
     items = [item for item in store.entries(camera_id, span.start, span.end) if scope.sees_camera(item.camera_id)]
     return DetectionLogHistory(items=items, total=len(items))
+
+
+@router.get("/daily", response_model=DailyReport)
+def daily_report(
+    _user: CurrentUser,
+    scope: Visible,
+    detections: Annotated[DetectionLogStore, Depends(get_detection_log_store)],
+    alerts: Annotated[AlertStore, Depends(get_alert_store)],
+    events: Annotated[EventStore, Depends(get_event_store)],
+    clock: Now,
+    day: Annotated[date | None, Query(ge=FIRST_REPORTABLE_DAY, description="Defaults to today in tz")] = None,
+    tz: TimeZoneName = DEFAULT_TIME_ZONE,
+) -> DailyReport:
+    """One day of activity, health indicators and alerts for the caller's account.
+
+    Computed from the stored data on every request rather than saved by a nightly
+    job: a report for a past day cannot go stale or go missing because a job did
+    not run, and today's can be read while the day is still running.
+    """
+    zone = time_zone(tz)
+    now = clock()
+    today = now.astimezone(zone).date()
+    chosen = today if day is None else day
+    if chosen > today:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="day must not be in the future")
+    span = day_window(chosen, zone)
+    entries = (item for item in detections.entries(None, span.start, span.end) if scope.sees_camera(item.camera_id))
+    detected = [event for event in events.list_since(span.start, scope.camera_ids) if event.timestamp < span.end]
+    return DailyReportBuilder(chosen, tz, span, now).build(
+        entries, alerts.created_between(span.start, span.end, scope.camera_ids), len(detected),
+    )
 
 
 @router.get("/camera-status", response_model=CameraStatusHistory)
