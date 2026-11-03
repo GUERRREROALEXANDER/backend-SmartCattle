@@ -56,6 +56,11 @@ def _camera(record: CameraRecord, now: datetime, settings: Settings, name: str |
     return Camera(**record.model_dump(), status=status_now, display_name=name)
 
 
+def _saved_name(store: CameraStore, camera_id: str) -> str | None:
+    saved = store.saved_one(camera_id)
+    return saved.name if saved is not None else None
+
+
 def _saved_view(saved: SavedCamera, store: CameraStore, now: datetime, settings: Settings) -> SavedCameraView:
     record = next((item for item in store.list() if item.id == saved.id), None)
     status_now = CameraStatus.OFFLINE if record is None else _camera(record, now, settings).status
@@ -201,7 +206,7 @@ def get_camera(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No reported camera with id {camera_id}",
         )
-    return _camera(record, now, settings)
+    return _camera(record, now, settings, _saved_name(store, camera_id))
 
 
 @router.put("/api/ai/cameras/{camera_id}/status", response_model=Camera, dependencies=[Depends(verify_api_key)])
@@ -216,7 +221,7 @@ def report_camera_status(
     # One reading of the clock: the stored timestamp and the status derived
     # from it must agree, or a fresh report could come back already offline.
     now = clock()
-    camera = _camera(store.report(camera_id, report, now), now, settings)
+    camera = _camera(store.report(camera_id, report, now), now, settings, _saved_name(store, camera_id))
     # A removed camera can still have a report on its way; it must not come back on anyone's screen.
     registration = store.registration(camera_id)
     if registration is None or registration.active:
