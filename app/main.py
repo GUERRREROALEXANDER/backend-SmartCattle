@@ -10,6 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 
 from app import __version__
 from app.core.config import Settings, get_settings
@@ -188,6 +190,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
             detail.append(item)
         return JSONResponse(status_code=422, content={"detail": detail})
+
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(SqlAlchemyTimeoutError)
+    async def handle_unavailable_database(request: Request, exc: Exception) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logger.error("Database unavailable: %s", type(exc).__name__, extra={"request_id": request_id})
+        # 503 and not 500: the request was fine and the same one can work in a
+        # moment. The driver's message names the host, so it stays in no response.
+        content = {"detail": "The database is unavailable. Try again shortly."}
+        return JSONResponse(
+            status_code=503, headers={"Retry-After": "10"},
+            content=content if request_id is None else content | {"request_id": request_id},
+        )
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:

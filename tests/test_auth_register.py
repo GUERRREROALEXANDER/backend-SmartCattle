@@ -111,6 +111,48 @@ def test_an_accented_password_is_measured_in_bytes(auth_client, owner_payload):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("password", [" " * 8, "\t\n \t\n \t\n"])
+def test_a_password_of_only_spaces_is_rejected(auth_client, owner_payload, password):
+    response = auth_client.post(REGISTER_URL, json=owner_payload | {"password": password})
+    assert response.status_code == 422
+    assert "only spaces" in response.text
+
+
+def test_a_password_with_spaces_inside_is_accepted(auth_client, owner_payload):
+    response = auth_client.post(REGISTER_URL, json=owner_payload | {"password": "una clave larga"})
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize("name", ["A\x00na", "Ana\nRestrepo", "Ana\x07"])
+def test_control_characters_in_the_name_are_rejected(auth_client, owner_payload, name):
+    # NUL reached PostgreSQL and came back as a 500; SQLite stores it happily.
+    response = auth_client.post(REGISTER_URL, json=owner_payload | {"full_name": name})
+    assert response.status_code == 422
+    assert "control characters" in response.text
+
+
+def test_an_accented_name_is_accepted(auth_client, owner_payload):
+    response = auth_client.post(REGISTER_URL, json=owner_payload | {"full_name": "María José Ñáñez"})
+    assert response.status_code == 201
+
+
+def test_a_rejected_registration_lists_each_field_without_echoing_it(auth_client):
+    response = auth_client.post(REGISTER_URL, json={
+        "email": "not-an-email", "password": "secreta", "full_name": "",
+    })
+    assert response.status_code == 422
+    assert {tuple(error["loc"]) for error in response.json()["detail"]} == {
+        ("body", "email"), ("body", "password"), ("body", "full_name"),
+    }
+    assert "secreta" not in response.text
+
+
+def test_a_body_that_is_not_json_is_a_structured_error(auth_client):
+    response = auth_client.post(REGISTER_URL, content="{not json", headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "json_invalid"
+
+
 def test_registration_needs_a_configured_secret(client, owner_payload):
     # The plain client fixture has no JWT_SECRET. 503 and not 500: nothing is
     # broken, the feature is switched off.
