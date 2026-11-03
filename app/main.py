@@ -40,11 +40,11 @@ from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
 from app.services.audit_log import InMemoryAuditLog, SqlAuditLog
 from app.services.broadcaster import Broadcaster
+from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
-from app.services.camera_pairing import CameraPairings
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
 from app.services.user_store import InMemoryUserStore, SqlUserStore
