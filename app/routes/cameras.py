@@ -1,30 +1,44 @@
 from datetime import datetime
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.core.config import Settings
 from app.dependencies import (
+    AuditTrail,
     Clock,
+    OwnerUser,
+    Visible,
     get_app_settings,
     get_broadcaster,
+    get_camera_pairings,
     get_camera_store,
     get_clock,
     get_occupancy_store,
     get_zone_store,
     verify_api_key,
 )
+from app.schemas.audit import AuditAction
 from app.schemas.camera import (
     Camera,
     CameraList,
+    CameraPairing,
     CameraRecord,
     CameraSourceReport,
+    CameraStatus,
     CameraStatusReport,
+    PairedCameraCreate,
+    SavedCamera,
+    SavedCameraCreate,
+    SavedCameraList,
+    SavedCameraView,
     effective_status,
 )
 from app.schemas.occupancy import DetectionFrame, OccupancyReport
 from app.schemas.zone import ZoneList
 from app.services.broadcaster import Broadcaster
+from app.services.camera_pairing import LIFETIME, CameraPairings
 from app.services.camera_store import CameraStore
 from app.services.occupancy_store import OccupancyStore
 from app.services.zone_store import ZoneStore
@@ -33,25 +47,142 @@ router = APIRouter(tags=["cameras"])
 CameraId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
 
 
-def _camera(record: CameraRecord, now: datetime, settings: Settings) -> Camera:
+#: A farm has a few cameras. A loop saving them has no reason to reach the database thousands of times.
+MAX_SAVED_CAMERAS = 50
+
+
+def _camera(record: CameraRecord, now: datetime, settings: Settings, name: str | None = None) -> Camera:
     status_now = effective_status(record, now, settings.camera_offline_after_seconds)
-    return Camera(**record.model_dump(), status=status_now)
+    return Camera(**record.model_dump(), status=status_now, display_name=name)
+
+
+def _saved_view(saved: SavedCamera, store: CameraStore, now: datetime, settings: Settings) -> SavedCameraView:
+    record = next((item for item in store.list() if item.id == saved.id), None)
+    status_now = CameraStatus.OFFLINE if record is None else _camera(record, now, settings).status
+    return SavedCameraView(id=saved.id, name=saved.name, source=saved.source, status=status_now)
+
+
+@router.get("/api/cameras/saved", response_model=SavedCameraList)
+def list_saved_cameras(
+    scope: Visible,
+    store: CameraStore = Depends(get_camera_store),
+    settings: Settings = Depends(get_app_settings),
+    clock: Clock = Depends(get_clock),
+) -> SavedCameraList:
+    """The cameras of this account, connected or not. Saving one opens nothing."""
+    now = clock()
+    items = [_saved_view(item, store, now, settings) for item in store.saved(scope.account_id)]
+    return SavedCameraList(items=items, total=len(items))
+
+
+@router.post("/api/cameras/saved", response_model=SavedCameraView, status_code=status.HTTP_201_CREATED)
+def save_camera(
+    data: SavedCameraCreate,
+    owner: OwnerUser,
+    audit: AuditTrail,
+    store: CameraStore = Depends(get_camera_store),
+    settings: Settings = Depends(get_app_settings),
+    clock: Clock = Depends(get_clock),
+) -> SavedCameraView:
+    """Adds a camera to the account. The id comes from here, so nobody can claim one another account already uses."""
+    if len(store.saved(owner.account_id)) >= MAX_SAVED_CAMERAS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This account already has too many cameras")
+    saved = SavedCamera(id=f"cam-{uuid4().hex[:12]}", name=data.name, source=data.source, account_id=owner.account_id)
+    store.save(saved)
+    audit.record(
+        AuditAction.CAMERA_SAVED, actor_id=owner.id, actor_email=owner.email,
+        target_type="camera", target_id=saved.id, detail={"name": saved.name},
+    )
+    return _saved_view(saved, store, clock(), settings)
+
+
+@router.post("/api/cameras/pairing", response_model=CameraPairing, status_code=status.HTTP_201_CREATED)
+def start_pairing(
+    owner: OwnerUser,
+    pairings: CameraPairings = Depends(get_camera_pairings),
+    clock: Clock = Depends(get_clock),
+) -> CameraPairing:
+    """A code for the QR that lets a phone add a camera to this account."""
+    return CameraPairing(code=pairings.issue(owner.account_id, clock()), expires_in=int(LIFETIME.total_seconds()))
+
+
+@router.post("/api/cameras/paired", response_model=SavedCameraView, status_code=status.HTTP_201_CREATED)
+def save_paired_camera(
+    data: PairedCameraCreate,
+    pairings: CameraPairings = Depends(get_camera_pairings),
+    store: CameraStore = Depends(get_camera_store),
+    settings: Settings = Depends(get_app_settings),
+    clock: Clock = Depends(get_clock),
+) -> SavedCameraView:
+    """Saves the camera sent by a phone. Needs the code instead of a session; 403 and not 401, as there is no session
+    to lose. Connecting it stays a separate step, from the Cameras page."""
+    now = clock()
+    account_id = pairings.redeem(data.code, now)
+    if account_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This QR has expired; show a new one")
+    if len(store.saved(account_id)) >= MAX_SAVED_CAMERAS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This account already has too many cameras")
+    saved = SavedCamera(id=f"cam-{uuid4().hex[:12]}", name=data.name, source=data.source, account_id=account_id)
+    store.save(saved)
+    return _saved_view(saved, store, now, settings)
+
+
+@router.get("/api/cameras/saved/{camera_id}", response_model=SavedCameraView)
+def get_saved_camera(
+    camera_id: CameraId,
+    scope: Visible,
+    store: CameraStore = Depends(get_camera_store),
+    settings: Settings = Depends(get_app_settings),
+    clock: Clock = Depends(get_clock),
+) -> SavedCameraView:
+    """One saved camera. The AI service asks this to learn whether a person may run or watch it."""
+    saved = store.saved_one(camera_id)
+    if saved is None or not scope.sees_account(saved.account_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No saved camera with id {camera_id}")
+    return _saved_view(saved, store, clock(), settings)
+
+
+@router.delete("/api/cameras/saved/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_saved_camera(
+    camera_id: CameraId,
+    owner: OwnerUser,
+    scope: Visible,
+    audit: AuditTrail,
+    store: CameraStore = Depends(get_camera_store),
+    broadcaster: Broadcaster = Depends(get_broadcaster),
+    clock: Clock = Depends(get_clock),
+) -> None:
+    saved = store.saved_one(camera_id)
+    if saved is None or not scope.sees_account(saved.account_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No saved camera with id {camera_id}")
+    store.forget(camera_id)
+    broadcaster.publish("camera.removed", {"id": camera_id}, clock(), account_id=saved.account_id)
+    audit.record(
+        AuditAction.CAMERA_DELETED, actor_id=owner.id, actor_email=owner.email,
+        target_type="camera", target_id=camera_id, detail={"name": saved.name},
+    )
 
 
 @router.get("/api/cameras", response_model=CameraList)
 def list_cameras(
+    scope: Visible,
     store: CameraStore = Depends(get_camera_store),
     settings: Settings = Depends(get_app_settings),
     clock: Clock = Depends(get_clock),
 ) -> CameraList:
     now = clock()
-    items = [_camera(record, now, settings) for record in store.list()]
+    names = {item.id: item.name for item in store.saved(scope.account_id)}
+    items = [
+        _camera(record, now, settings, names.get(record.id))
+        for record in store.list() if scope.sees_camera(record.id)
+    ]
     return CameraList(items=items, total=len(items))
 
 
 @router.get("/api/cameras/{camera_id}", response_model=Camera)
 def get_camera(
     camera_id: CameraId,
+    scope: Visible,
     store: CameraStore = Depends(get_camera_store),
     settings: Settings = Depends(get_app_settings),
     clock: Clock = Depends(get_clock),
@@ -65,7 +196,7 @@ def get_camera(
     """
     now = clock()
     record = next((item for item in store.list() if item.id == camera_id), None)
-    if record is None:
+    if record is None or not scope.sees_camera(camera_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No reported camera with id {camera_id}",
@@ -89,7 +220,7 @@ def report_camera_status(
     # A removed camera can still have a report on its way; it must not come back on anyone's screen.
     registration = store.registration(camera_id)
     if registration is None or registration.active:
-        broadcaster.publish("camera.status", camera, now)
+        broadcaster.publish("camera.status", camera, now, account_id=store.owner_of(camera_id))
     return camera
 
 
@@ -112,7 +243,7 @@ def register_camera_source(
     """
     store.register(camera_id, report)
     if not report.active:
-        broadcaster.publish("camera.removed", {"id": camera_id}, clock())
+        broadcaster.publish("camera.removed", {"id": camera_id}, clock(), account_id=store.owner_of(camera_id))
 
 
 @router.get("/api/ai/cameras/{camera_id}/zones", response_model=ZoneList, dependencies=[Depends(verify_api_key)])
@@ -137,6 +268,7 @@ def report_occupancy(
     camera_id: CameraId,
     report: OccupancyReport,
     store: OccupancyStore = Depends(get_occupancy_store),
+    cameras: CameraStore = Depends(get_camera_store),
     broadcaster: Broadcaster = Depends(get_broadcaster),
     clock: Clock = Depends(get_clock),
 ) -> None:
@@ -153,7 +285,8 @@ def report_occupancy(
     occupancy = store.record(camera_id, report, now)
     if occupancy is None:
         return
-    broadcaster.publish("occupancy.updated", occupancy, now)
+    account = cameras.owner_of(camera_id)
+    broadcaster.publish("occupancy.updated", occupancy, now, account_id=account)
     if report.detections:
         frame = DetectionFrame(camera_id=camera_id, observed_at=report.observed_at, detections=report.detections)
-        broadcaster.publish("detections", frame, now)
+        broadcaster.publish("detections", frame, now, account_id=account)
