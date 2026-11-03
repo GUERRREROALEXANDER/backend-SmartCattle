@@ -41,9 +41,12 @@ class EventQuery:
     event_type: EventType | None = None
     limit: int = MAX_LISTED_EVENTS
     offset: int = 0
+    camera_ids: frozenset[str] | None = None
 
     def matches(self, event: Event) -> bool:
         """Whether an event satisfies the filters. Used by the in-memory store."""
+        if self.camera_ids is not None and event.camera_id not in self.camera_ids:
+            return False
         if self.camera_id is not None and event.camera_id != self.camera_id:
             return False
         if self.level is not None and event.level is not self.level:
@@ -68,9 +71,9 @@ class EventStore(Protocol):
 
     def list(self) -> Events: ...
 
-    def list_since(self, start: datetime) -> Events: ...
+    def list_since(self, start: datetime, camera_ids: frozenset[str] | None = None) -> Events: ...
 
-    def count_between(self, start: datetime, end: datetime) -> int: ...
+    def count_between(self, start: datetime, end: datetime, camera_ids: frozenset[str] | None = None) -> int: ...
 
     def page(self, query: EventQuery) -> EventPage: ...
 
@@ -95,14 +98,20 @@ class InMemoryEventStore:
         with self._lock:
             return list(reversed(self._events))
 
-    def list_since(self, start: datetime) -> Events:
+    def list_since(self, start: datetime, camera_ids: frozenset[str] | None = None) -> Events:
         with self._lock:
-            return [event for event in self._events if event.timestamp >= start]
+            return [
+                event for event in self._events
+                if event.timestamp >= start and (camera_ids is None or event.camera_id in camera_ids)
+            ]
 
-    def count_between(self, start: datetime, end: datetime) -> int:
+    def count_between(self, start: datetime, end: datetime, camera_ids: frozenset[str] | None = None) -> int:
         with self._lock:
             # Counted without building a list: the caller only wants the number.
-            return sum(1 for event in self._events if start <= event.timestamp <= end)
+            return sum(
+                1 for event in self._events
+                if start <= event.timestamp <= end and (camera_ids is None or event.camera_id in camera_ids)
+            )
 
     def page(self, query: EventQuery) -> EventPage:
         with self._lock:
@@ -215,12 +224,14 @@ class SqlEventStore:
         )
         return self._fetch(query)
 
-    def list_since(self, start: datetime) -> Events:
+    def list_since(self, start: datetime, camera_ids: frozenset[str] | None = None) -> Events:
         # Metrics use detection time, and unlike the event feed this query has no 1000-row limit in SQL.
         query = _listable_events().where(EventRow.timestamp >= start).order_by(EventRow.timestamp, EventRow.id)
+        if camera_ids is not None:
+            query = query.where(CameraRow.name.in_(camera_ids))
         return self._fetch(query)
 
-    def count_between(self, start: datetime, end: datetime) -> int:
+    def count_between(self, start: datetime, end: datetime, camera_ids: frozenset[str] | None = None) -> int:
         """COUNT(*) over the window, so the database returns one row.
 
         Shares _listable_conditions() with the listing queries, so a row the
@@ -236,6 +247,8 @@ class SqlEventStore:
                 EventRow.timestamp <= end,
             )
         )
+        if camera_ids is not None:
+            query = query.join(CameraRow, EventRow.camera_id == CameraRow.id).where(CameraRow.name.in_(camera_ids))
         with self._sessions() as session:
             return int(session.scalar(query) or 0)
 
@@ -243,6 +256,8 @@ class SqlEventStore:
         conditions = _listable_conditions()
         if query.camera_id is not None:
             conditions.append(CameraRow.name == query.camera_id)
+        if query.camera_ids is not None:
+            conditions.append(CameraRow.name.in_(query.camera_ids))
         if query.level is not None:
             conditions.append(EventRow.level == query.level.value)
         if query.event_type is not None:
