@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # The first account can always be created, so that an owner exists. After it, off means that only the owner
     # creates accounts: on the internet, an open form hands the dashboard to anyone who finds it.
     public_registration: bool = True
+    # Each registered person gets a space of their own, and everything but the health check needs a session.
+    # Off is the old single-farm behaviour: every account shares the one farm.
+    account_isolation: bool = True
     # Off leaves the herd, the events and the camera list readable without a session.
     require_auth_for_reads: bool = False
     api_docs_enabled: bool = True
