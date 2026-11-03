@@ -38,10 +38,12 @@ class AlertQuery:
     camera_id: str | None = None
     limit: int = 50
     offset: int = 0
+    camera_ids: frozenset[str] | None = None
 
     def matches(self, alert: Alert) -> bool:
         return (
-            (self.status is None or alert.status is self.status)
+            (self.camera_ids is None or alert.camera_id in self.camera_ids)
+            and (self.status is None or alert.status is self.status)
             and (self.severity is None or alert.severity is self.severity)
             and (self.camera_id is None or alert.camera_id == self.camera_id)
         )
@@ -60,9 +62,9 @@ class AlertStore(Protocol):
 
     def page(self, query: AlertQuery) -> AlertPage: ...
 
-    def count_open(self) -> int: ...
+    def count_open(self, camera_ids: frozenset[str] | None = None) -> int: ...
 
-    def created_between(self, start: datetime, end: datetime) -> list[Alert]:
+    def created_between(self, start: datetime, end: datetime, camera_ids: frozenset[str] | None = None) -> list[Alert]:
         """Alerts raised in [start, end), oldest first. For reports, which bound the window."""
         ...
 
@@ -117,13 +119,19 @@ class InMemoryAlertStore:
             )
         return AlertPage(items=matching[query.offset:query.offset + query.limit], total=len(matching))
 
-    def count_open(self) -> int:
+    def count_open(self, camera_ids: frozenset[str] | None = None) -> int:
         with self._lock:
-            return sum(1 for alert in self._alerts.values() if alert.status is AlertStatus.OPEN)
+            return sum(
+                1 for alert in self._alerts.values()
+                if alert.status is AlertStatus.OPEN and (camera_ids is None or alert.camera_id in camera_ids)
+            )
 
-    def created_between(self, start: datetime, end: datetime) -> list[Alert]:
+    def created_between(self, start: datetime, end: datetime, camera_ids: frozenset[str] | None = None) -> list[Alert]:
         with self._lock:
-            found = [alert for alert in self._alerts.values() if start <= alert.created_at < end]
+            found = [
+                alert for alert in self._alerts.values()
+                if start <= alert.created_at < end and (camera_ids is None or alert.camera_id in camera_ids)
+            ]
         return sorted(found, key=_newest_first)
 
     def transition(self, alert_id: UUID, target: AlertStatus, user_id: int, now: datetime) -> Alert | None:
@@ -185,6 +193,8 @@ class SqlAlertStore:
             conditions.append(SecurityAlertRow.severity == query.severity.value)
         if query.camera_id is not None:
             conditions.append(CameraRow.name == query.camera_id)
+        if query.camera_ids is not None:
+            conditions.append(CameraRow.name.in_(query.camera_ids))
         rows = (
             _WITH_CAMERA.where(*conditions)
             .order_by(SecurityAlertRow.created_at.desc(), SecurityAlertRow.id.desc())
@@ -198,18 +208,24 @@ class SqlAlertStore:
             items = [_to_alert(row, camera) for row, camera in session.execute(rows)]
             return AlertPage(items=items, total=int(session.scalar(total) or 0))
 
-    def count_open(self) -> int:
+    def count_open(self, camera_ids: frozenset[str] | None = None) -> int:
         query = select(func.count()).select_from(SecurityAlertRow).where(
             SecurityAlertRow.status == AlertStatus.OPEN.value,
         )
+        if camera_ids is not None:
+            query = query.join(CameraRow, SecurityAlertRow.camera_id == CameraRow.id).where(
+                CameraRow.name.in_(camera_ids),
+            )
         with self._sessions() as session:
             return int(session.scalar(query) or 0)
 
-    def created_between(self, start: datetime, end: datetime) -> list[Alert]:
+    def created_between(self, start: datetime, end: datetime, camera_ids: frozenset[str] | None = None) -> list[Alert]:
         query = (
             _WITH_CAMERA.where(SecurityAlertRow.created_at >= start, SecurityAlertRow.created_at < end)
             .order_by(SecurityAlertRow.created_at, SecurityAlertRow.id)
         )
+        if camera_ids is not None:
+            query = query.where(CameraRow.name.in_(camera_ids))
         with self._sessions() as session:
             return [_to_alert(row, camera) for row, camera in session.execute(query)]
 
