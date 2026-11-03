@@ -11,6 +11,8 @@ from app.dependencies import (
     AuditTrail,
     Clock,
     CurrentUser,
+    Scope,
+    Visible,
     get_app_settings,
     get_broadcaster,
     get_clock,
@@ -43,9 +45,9 @@ Hub = Annotated[Broadcaster, Depends(get_broadcaster)]
 Now = Annotated[Clock, Depends(get_clock)]
 
 
-def _upload_or_404(store: VideoUploadStore, upload_id: UUID) -> StoredVideoUpload:
+def _upload_or_404(store: VideoUploadStore, upload_id: UUID, scope: Scope) -> StoredVideoUpload:
     upload = store.get(upload_id)
-    if upload is None:
+    if upload is None or not scope.sees_user(upload.uploaded_by):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No upload with id {upload_id}")
     return upload
 
@@ -54,6 +56,7 @@ def _upload_or_404(store: VideoUploadStore, upload_id: UUID) -> StoredVideoUploa
 def start_upload(
     data: VideoUploadCreate,
     user: CurrentUser,
+    scope: Visible,
     store: Store,
     storage: Storage,
     clock: Now,
@@ -81,7 +84,9 @@ def start_upload(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"A {data.content_type} file must end in {', '.join(sorted(extensions))}",
         )
-    if data.lot_id is not None and farms.get_lot(data.lot_id) is None:
+    lot = None if data.lot_id is None else farms.get_lot(data.lot_id)
+    farm = None if lot is None else farms.get_farm(lot.farm_id)
+    if data.lot_id is not None and (farm is None or not scope.sees_user(farm.owner_id)):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"No lot with id {data.lot_id}")
 
     now = clock()
@@ -104,7 +109,8 @@ def start_upload(
 
 @router.post("/{upload_id}/complete", response_model=VideoUpload)
 def complete_upload(
-    upload_id: UUID, user: CurrentUser, store: Store, storage: Storage, hub: Hub, clock: Now, audit: AuditTrail,
+    upload_id: UUID, user: CurrentUser, scope: Visible, store: Store, storage: Storage, hub: Hub, clock: Now,
+    audit: AuditTrail,
 ) -> VideoUpload:
     """Confirms the file reached the bucket and queues it for the AI service.
 
@@ -112,7 +118,7 @@ def complete_upload(
     is not enforced by every S3-compatible store. A mismatch deletes the
     object and fails the upload rather than queueing a file nobody vouched for.
     """
-    upload = _upload_or_404(store, upload_id)
+    upload = _upload_or_404(store, upload_id, scope)
     if upload.uploaded_by != user.id and user.role is not UserRole.OWNER:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the uploader or an owner can do this")
     if upload.status is not UploadStatus.PENDING_UPLOAD:
@@ -130,7 +136,7 @@ def complete_upload(
                 "error": f"Uploaded {stored_size} bytes but declared {upload.size_bytes}",
             })
             assert failed is not None  # noqa: S101 - read above, and uploads are never deleted
-            hub.publish("video.updated", failed.public(), now)
+            hub.publish("video.updated", failed.public(), now, account_id=user.account_id)
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="The uploaded file does not match its size",
             )
@@ -142,7 +148,7 @@ def complete_upload(
             status_code=status.HTTP_409_CONFLICT, detail=f"The upload is already {error.current}",
         ) from error
     assert queued is not None  # noqa: S101
-    hub.publish("video.updated", queued.public(), now)
+    hub.publish("video.updated", queued.public(), now, account_id=user.account_id)
     audit.record(
         AuditAction.VIDEO_UPLOADED, actor_id=user.id, actor_email=user.email, target_type="video_upload",
         target_id=upload_id, detail={"file_name": upload.file_name, "size_bytes": upload.size_bytes},
@@ -153,16 +159,17 @@ def complete_upload(
 @router.get("", response_model=VideoUploadList)
 def list_uploads(
     _user: CurrentUser,
+    scope: Visible,
     store: Store,
     upload_status: Annotated[UploadStatus | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> VideoUploadList:
     """Uploads, newest first, with their processing progress."""
-    page = store.page(upload_status, limit, offset)
+    page = store.page(upload_status, limit, offset, scope.user_ids)
     return VideoUploadList(items=[upload.public() for upload in page.items], total=page.total)
 
 
 @router.get("/{upload_id}", response_model=VideoUpload)
-def get_upload(upload_id: UUID, _user: CurrentUser, store: Store) -> VideoUpload:
-    return _upload_or_404(store, upload_id).public()
+def get_upload(upload_id: UUID, _user: CurrentUser, scope: Visible, store: Store) -> VideoUpload:
+    return _upload_or_404(store, upload_id, scope).public()
