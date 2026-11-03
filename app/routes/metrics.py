@@ -7,6 +7,7 @@ from app.core.config import Settings
 from app.dependencies import (
     Clock,
     CurrentUser,
+    Visible,
     get_alert_store,
     get_app_settings,
     get_camera_store,
@@ -30,6 +31,7 @@ router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 @router.get("/summary", response_model=MetricsSummary)
 def metrics_summary(
+    scope: Visible,
     since: AwareDatetime | None = None,
     event_store: EventStore = Depends(get_event_store),
     analysis_store: VideoAnalysisStore = Depends(get_video_analysis_store),
@@ -47,7 +49,7 @@ def metrics_summary(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     since_utc = since.astimezone(UTC) if since is not None else None
 
-    latest = analysis_store.list(1)
+    latest = analysis_store.list(1, scope.account_id)
     animals_inside = animals_outside = None
     if latest:
         analysis = latest[0]
@@ -57,13 +59,13 @@ def metrics_summary(
         animals_outside = min(len(outside_tracks), analysis.max_cattle)
         animals_inside = analysis.max_cattle - animals_outside
 
-    detections = event_store.count_between(hour_start, now)
+    detections = event_store.count_between(hour_start, now, scope.camera_ids)
     return MetricsSummary(
         animals_inside=animals_inside,
         animals_outside=animals_outside,
-        alerts_today=event_store.count_between(today_start, now),
+        alerts_today=event_store.count_between(today_start, now, scope.camera_ids),
         alerts_since=(
-            event_store.count_between(since_utc, now) if since_utc is not None else None
+            event_store.count_between(since_utc, now, scope.camera_ids) if since_utc is not None else None
         ),
         # Rounded: the raw division serialises as 0.03333333333333333, which
         # is sixteen digits of precision the measurement does not have -- it
@@ -75,6 +77,7 @@ def metrics_summary(
 @router.get("/live", response_model=LiveMetrics)
 def live_metrics(
     _user: CurrentUser,
+    scope: Visible,
     cameras: CameraStore = Depends(get_camera_store),
     occupancy: OccupancyStore = Depends(get_occupancy_store),
     alerts: AlertStore = Depends(get_alert_store),
@@ -94,7 +97,9 @@ def live_metrics(
     """
     now = clock().astimezone(UTC)
     return compute_live_metrics(
-        cameras=cameras.list(), counts=occupancy.list(), open_alerts=alerts.count_open(),
-        events_last_hour=events.count_between(now - timedelta(hours=1), now),
+        cameras=[camera for camera in cameras.list() if scope.sees_camera(camera.id)],
+        counts=[count for count in occupancy.list() if scope.sees_camera(count.camera_id)],
+        open_alerts=alerts.count_open(scope.camera_ids),
+        events_last_hour=events.count_between(now - timedelta(hours=1), now, scope.camera_ids),
         now=now, offline_after_seconds=settings.camera_offline_after_seconds,
     )
