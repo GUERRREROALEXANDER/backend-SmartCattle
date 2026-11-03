@@ -29,6 +29,7 @@ from app.services.broadcaster import Broadcaster
 from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import CameraStore
 from app.services.catalog_store import CatalogStore
+from app.services.detection_log_store import DetectionLogStore
 from app.services.event_store import EventStore
 from app.services.farm_agents import FarmServices, account_of, is_farm_key
 from app.services.farm_store import FarmStore
@@ -99,6 +100,11 @@ def get_broadcaster(request: Request) -> Broadcaster:
 
 def get_occupancy_store(request: Request) -> OccupancyStore:
     store: OccupancyStore = request.app.state.occupancy_store
+    return store
+
+
+def get_detection_log_store(request: Request) -> DetectionLogStore:
+    store: DetectionLogStore = request.app.state.detection_log_store
     return store
 
 

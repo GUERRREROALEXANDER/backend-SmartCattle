@@ -15,6 +15,7 @@ from app.dependencies import (
     get_camera_pairings,
     get_camera_store,
     get_clock,
+    get_detection_log_store,
     get_occupancy_store,
     get_zone_store,
     verify_camera_reporter,
@@ -35,11 +36,13 @@ from app.schemas.camera import (
     SavedCameraView,
     effective_status,
 )
+from app.schemas.detection import DetectionLogReport
 from app.schemas.occupancy import DetectionFrame, OccupancyReport
 from app.schemas.zone import ZoneList
 from app.services.broadcaster import Broadcaster
 from app.services.camera_pairing import LIFETIME, CameraPairings
 from app.services.camera_store import CameraStore
+from app.services.detection_log_store import DetectionLogStore
 from app.services.occupancy_store import OccupancyStore
 from app.services.zone_store import ZoneStore
 
@@ -297,3 +300,22 @@ def report_occupancy(
     if report.detections:
         frame = DetectionFrame(camera_id=camera_id, observed_at=report.observed_at, detections=report.detections)
         broadcaster.publish("detections", frame, now, account_id=account)
+
+
+@router.put(
+    "/api/ai/cameras/{camera_id}/detection-log", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(verify_camera_reporter)],
+)
+def report_detection_log(
+    camera_id: CameraId,
+    report: DetectionLogReport,
+    store: DetectionLogStore = Depends(get_detection_log_store),
+) -> None:
+    """What YOLO saw on one camera, counted by posture. Feeds GET /api/reports/daily.
+
+    The AI service can send it as often as it counts: only the last report of each
+    minute is kept, which is what keeps per-frame detections out of the database
+    (ARCHITECTURE section 8). An empty scene is worth reporting too, because it
+    tells a quiet pasture apart from a camera that was not watching.
+    """
+    store.record(camera_id, report)

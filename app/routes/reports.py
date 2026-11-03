@@ -22,10 +22,12 @@ from app.dependencies import (
     get_alert_store,
     get_camera_store,
     get_clock,
+    get_detection_log_store,
     get_event_store,
     get_occupancy_store,
 )
 from app.schemas.alert import Alert, AlertStatus
+from app.schemas.detection import DetectionLogHistory
 from app.schemas.event import EventLevel
 from app.schemas.report import (
     AlertDay,
@@ -37,6 +39,7 @@ from app.schemas.report import (
 )
 from app.services.alert_store import AlertStore
 from app.services.camera_store import CameraStore
+from app.services.detection_log_store import DetectionLogStore
 from app.services.event_store import EventStore
 from app.services.occupancy_store import OccupancyStore
 
@@ -61,6 +64,22 @@ def occupancy_history(
     span = window(start, end, clock())
     items = [item for item in store.samples(camera_id, span.start, span.end) if scope.sees_camera(item.camera_id)]
     return OccupancyHistory(items=items, total=len(items))
+
+
+@router.get("/detections", response_model=DetectionLogHistory)
+def detection_history(
+    _user: CurrentUser,
+    scope: Visible,
+    store: Annotated[DetectionLogStore, Depends(get_detection_log_store)],
+    clock: Now,
+    camera_id: CameraFilter = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> DetectionLogHistory:
+    """What the AI saw per camera and minute, by posture. Defaults to the last 7 days, at most 92."""
+    span = window(start, end, clock())
+    items = [item for item in store.entries(camera_id, span.start, span.end) if scope.sees_camera(item.camera_id)]
+    return DetectionLogHistory(items=items, total=len(items))
 
 
 @router.get("/camera-status", response_model=CameraStatusHistory)

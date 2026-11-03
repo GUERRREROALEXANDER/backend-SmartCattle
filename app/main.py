@@ -46,6 +46,7 @@ from app.services.broadcaster import Broadcaster
 from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
+from app.services.detection_log_store import InMemoryDetectionLogStore, SqlDetectionLogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_agents import FarmServices
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
@@ -97,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.farm_store = InMemoryFarmStore()
         app.state.alert_store = InMemoryAlertStore()
         app.state.occupancy_store = InMemoryOccupancyStore()
+        app.state.detection_log_store = InMemoryDetectionLogStore()
         app.state.video_upload_store = InMemoryVideoUploadStore()
         app.state.catalog_store = InMemoryCatalogStore()
         app.state.audit_log = InMemoryAuditLog()
@@ -113,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.farm_store = SqlFarmStore(sessions)
         app.state.alert_store = SqlAlertStore(sessions)
         app.state.occupancy_store = SqlOccupancyStore(sessions)
+        app.state.detection_log_store = SqlDetectionLogStore(sessions)
         app.state.video_upload_store = SqlVideoUploadStore(sessions)
         app.state.catalog_store = SqlCatalogStore(sessions)
         app.state.audit_log = SqlAuditLog(sessions)
