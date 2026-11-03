@@ -133,3 +133,16 @@ guessing loop rather than a patient one.
 - **No password reset.** There is no email sender.
 - **No audit log.** `users.last_login_at` records the last success, not the
   failures or where they came from.
+
+
+## Accounts
+
+Each person who registers owns a new, empty space. An owner adds staff with `POST /api/users`; they work in that owner's space. Cameras, animals and analyses carry `account_id`; events, alerts, zones and reports follow their camera, and farms and uploads follow who made them. An id from another account answers 404, like one that does not exist, and `/ws/live` only carries the messages of its account.
+
+`ACCOUNT_ISOLATION=false` returns to one farm shared by every account. Known limit: `animals.tag` is still unique across all accounts, so two farms cannot register the same ear tag.
+
+## Connecting a camera
+
+Saving one (`POST /api/cameras/saved`) opens nothing: the AI service starts it only when someone presses Connect. The password is never stored here; it goes straight to the AI service on connecting. A camera the AI service reports without being saved is shown to nobody.
+
+`POST /api/cameras/pairing` gives a code for a QR. It lets a phone call `POST /api/cameras/paired` once, within ten minutes, to save one camera in that account.
