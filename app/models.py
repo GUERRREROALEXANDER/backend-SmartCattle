@@ -271,6 +271,24 @@ class OccupancySampleRow(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class DetectionLogRow(Base):
+    """What the AI saw on one camera in one minute: the last report of that minute."""
+
+    __tablename__ = "detection_logs"
+
+    camera_id: Mapped[int] = mapped_column(
+        BIGINT_ID, ForeignKey("cameras.id", ondelete="CASCADE"), primary_key=True,
+    )
+    minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    cattle_lying: Mapped[int] = mapped_column(Integer)
+    cattle_standing: Mapped[int] = mapped_column(Integer)
+    cattle_walking: Mapped[int] = mapped_column(Integer)
+    cattle_unknown: Mapped[int] = mapped_column(Integer)
+    people: Mapped[int] = mapped_column(Integer)
+    avg_confidence: Mapped[float | None] = mapped_column(Float)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class CameraStatusChangeRow(Base):
     """A camera's reported status, recorded only when it changes."""
 
