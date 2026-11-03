@@ -45,7 +45,7 @@ services:
         value: "60"
       - key: ALLOWED_ORIGINS
         value: https://smartcattle-frontend.onrender.com,http://localhost:5173
-      # The AI service runs on each farm's PC (Iniciar SmartCattle.bat), which reports where it is reached.
+      # Works for every account from the start. An account that links a PC at its farm uses that PC instead.
       - key: SMARTCATTLE_AI_URL
         value: http://localhost:8090
       - key: CAMERA_OFFLINE_AFTER_SECONDS
@@ -100,6 +100,5 @@ services:
         value: https://smartcattle-backend.onrender.com
       - key: VITE_DATA_SOURCE
         value: hybrid
-      # Empty on purpose: each account's dashboard finds its own farm PC through GET /api/farm-pc.
       - key: VITE_AI_SERVICE_URL
-        value: ""
+        value: https://smartcattle-live.onrender.com
