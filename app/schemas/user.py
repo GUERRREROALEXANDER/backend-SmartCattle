@@ -2,7 +2,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.auth import MIN_PASSWORD_LENGTH, User, UserCreate, UserRole, check_password_bytes
+from app.schemas.auth import MIN_PASSWORD_LENGTH, User, UserCreate, UserRole, check_new_password, check_printable
 
 
 class UserAccountCreate(UserCreate):
@@ -33,6 +33,11 @@ class UserUpdate(BaseModel):
     def strip_full_name(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
+    @field_validator("full_name")
+    @classmethod
+    def printable_full_name(cls, value: str | None) -> str | None:
+        return None if value is None else check_printable(value)
+
     @model_validator(mode="after")
     def changes_something(self) -> Self:
         if not self.model_fields_set:
@@ -58,8 +63,8 @@ class PasswordChange(BaseModel):
 
     @field_validator("new_password")
     @classmethod
-    def new_password_fits_bcrypt(cls, value: str) -> str:
-        return check_password_bytes(value)
+    def new_password_is_usable(cls, value: str) -> str:
+        return check_new_password(value)
 
     @model_validator(mode="after")
     def password_actually_changes(self) -> Self:

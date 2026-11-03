@@ -32,6 +32,20 @@ def check_password_bytes(value: str) -> str:
     return value
 
 
+def check_new_password(value: str) -> str:
+    """The rules for a password being set; logging in with an existing one never goes through here."""
+    if not value.strip():
+        raise ValueError("password must not be only spaces")
+    return check_password_bytes(value)
+
+
+def check_printable(value: str) -> str:
+    """Refuses control characters; PostgreSQL cannot store NUL, so it would otherwise fail as a 500."""
+    if not value.isprintable():
+        raise ValueError("must not contain control characters")
+    return value
+
+
 class UserCreate(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -60,10 +74,15 @@ class UserCreate(BaseModel):
     def strip_full_name(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
 
+    @field_validator("full_name")
+    @classmethod
+    def printable_full_name(cls, value: str) -> str:
+        return check_printable(value)
+
     @field_validator("password")
     @classmethod
-    def password_fits_bcrypt(cls, value: str) -> str:
-        return check_password_bytes(value)
+    def password_is_usable(cls, value: str) -> str:
+        return check_new_password(value)
 
 
 class LoginRequest(BaseModel):
