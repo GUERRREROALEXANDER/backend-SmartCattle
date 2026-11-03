@@ -12,6 +12,7 @@ the single place where that ``Any`` is turned back into a real type.
 
 import secrets
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated
 
@@ -25,6 +26,7 @@ from app.services.alert_store import AlertStore
 from app.services.animal_store import AnimalStore
 from app.services.audit_log import AuditLog, Auditor
 from app.services.broadcaster import Broadcaster
+from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import CameraStore
 from app.services.catalog_store import CatalogStore
 from app.services.event_store import EventStore
@@ -146,6 +148,11 @@ def get_auditor(
     return Auditor(log=log, now=clock(), ip_address=None if request.client is None else request.client.host)
 
 
+def get_camera_pairings(request: Request) -> CameraPairings:
+    pairings: CameraPairings = request.app.state.camera_pairings
+    return pairings
+
+
 def get_login_throttle(request: Request) -> LoginThrottle:
     throttle: LoginThrottle = request.app.state.login_throttle
     return throttle
@@ -249,6 +256,56 @@ def signed_in_to_read(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+
+@dataclass(frozen=True)
+class Scope:
+    """What one request may see. None means no limit, which only a deployment without account separation gets."""
+
+    account_id: int | None = None
+    camera_ids: frozenset[str] | None = None
+    user_ids: frozenset[int] | None = None
+
+    def sees_camera(self, camera_id: str | None) -> bool:
+        return self.camera_ids is None or camera_id in self.camera_ids
+
+    def sees_account(self, account_id: int | None) -> bool:
+        return self.account_id is None or account_id == self.account_id
+
+    def sees_user(self, user_id: int | None) -> bool:
+        return self.user_ids is None or user_id in self.user_ids
+
+
+def account_scope(
+    request: Request,
+    settings: Settings = Depends(get_app_settings),
+    users: UserStore = Depends(get_user_store),
+    cameras: CameraStore = Depends(get_camera_store),
+    clock: Clock = Depends(get_clock),
+) -> Scope:
+    """The account behind this request. Everything a person reads goes through here.
+
+    Filters on the data's owner rather than trusting the caller to ask for its own: an id from another account then
+    behaves exactly like an id that does not exist.
+    """
+    if not settings.account_isolation:
+        return Scope()
+    secret = require_jwt_secret(settings)
+    # Read from the header and not through bearer_scheme, like signed_in_to_read: the rule is per deployment.
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    user = user_for_token(token, secret, users, clock()) if scheme.lower() == "bearer" and token else None
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid access token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return Scope(
+        account_id=user.account_id, camera_ids=cameras.camera_ids(user.account_id),
+        user_ids=users.ids_in_account(user.account_id),
+    )
+
+
+Visible = Annotated[Scope, Depends(account_scope)]
 
 CurrentUser = Annotated[StoredUser, Depends(current_user)]
 

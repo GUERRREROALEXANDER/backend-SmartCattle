@@ -2,6 +2,8 @@ import os
 
 # Tests register and sign in far more than any person; test_guard.py turns the limits on where they are the subject.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# These suites test one farm's behaviour; test_accounts.py turns the separation between accounts on.
+os.environ["ACCOUNT_ISOLATION"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient
