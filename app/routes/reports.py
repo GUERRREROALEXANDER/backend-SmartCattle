@@ -18,6 +18,7 @@ from app.core.time_window import DEFAULT_TIME_ZONE, time_zone, window
 from app.dependencies import (
     Clock,
     CurrentUser,
+    Visible,
     get_alert_store,
     get_camera_store,
     get_clock,
@@ -49,6 +50,7 @@ TimeZoneName = Annotated[str, Query(max_length=64, description="IANA time zone t
 @router.get("/occupancy", response_model=OccupancyHistory)
 def occupancy_history(
     _user: CurrentUser,
+    scope: Visible,
     store: Annotated[OccupancyStore, Depends(get_occupancy_store)],
     clock: Now,
     camera_id: CameraFilter = None,
@@ -57,13 +59,14 @@ def occupancy_history(
 ) -> OccupancyHistory:
     """The head count per camera and minute. Defaults to the last 7 days, at most 92."""
     span = window(start, end, clock())
-    items = store.samples(camera_id, span.start, span.end)
+    items = [item for item in store.samples(camera_id, span.start, span.end) if scope.sees_camera(item.camera_id)]
     return OccupancyHistory(items=items, total=len(items))
 
 
 @router.get("/camera-status", response_model=CameraStatusHistory)
 def camera_status_history(
     _user: CurrentUser,
+    scope: Visible,
     store: Annotated[CameraStore, Depends(get_camera_store)],
     clock: Now,
     camera_id: CameraFilter = None,
@@ -72,7 +75,10 @@ def camera_status_history(
 ) -> CameraStatusHistory:
     """Each time a camera's reported status changed, oldest first."""
     span = window(start, end, clock())
-    items = store.status_changes(camera_id, span.start, span.end)
+    items = [
+        item for item in store.status_changes(camera_id, span.start, span.end)
+        if scope.sees_camera(item.camera_id)
+    ]
     return CameraStatusHistory(items=items, total=len(items))
 
 
@@ -91,6 +97,7 @@ def _day(moment: datetime, zone: ZoneInfo) -> date:
 @router.get("/alerts", response_model=AlertReport)
 def alert_report(
     _user: CurrentUser,
+    scope: Visible,
     store: Annotated[AlertStore, Depends(get_alert_store)],
     clock: Now,
     start: datetime | None = None,
@@ -100,7 +107,7 @@ def alert_report(
     """Alerts raised per day, by severity and current status, and the average time to handle them."""
     zone = time_zone(tz)
     span = window(start, end, clock())
-    alerts = store.created_between(span.start, span.end)
+    alerts = store.created_between(span.start, span.end, scope.camera_ids)
     per_day: dict[date, Counter[str]] = {}
     for alert in alerts:
         counts = per_day.setdefault(_day(alert.created_at, zone), Counter())
@@ -123,6 +130,7 @@ def alert_report(
 @router.get("/events", response_model=EventReport)
 def event_report(
     _user: CurrentUser,
+    scope: Visible,
     store: Annotated[EventStore, Depends(get_event_store)],
     clock: Now,
     start: datetime | None = None,
@@ -132,7 +140,7 @@ def event_report(
     """Detections per day and camera, by severity. Days follow the detection time."""
     zone = time_zone(tz)
     span = window(start, end, clock())
-    events = [event for event in store.list_since(span.start) if event.timestamp < span.end]
+    events = [event for event in store.list_since(span.start, scope.camera_ids) if event.timestamp < span.end]
     per_day: dict[tuple[date, str], Counter[str]] = {}
     for event in events:
         counts = per_day.setdefault((_day(event.timestamp, zone), event.camera_id), Counter())
