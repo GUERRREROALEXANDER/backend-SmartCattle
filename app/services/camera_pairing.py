@@ -15,13 +15,20 @@ LIFETIME = timedelta(minutes=10)
 MAX_WAITING = 500
 
 
+#: No letters that read like digits: this code gets typed by hand on the farm's PC.
+SHORT_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
 class CameraPairings:
     def __init__(self) -> None:
         self._codes: dict[str, tuple[int, datetime]] = {}
         self._lock = Lock()
 
-    def issue(self, account_id: int, now: datetime) -> str:
-        code = secrets.token_urlsafe(24)
+    def issue_short(self, account_id: int, now: datetime) -> str:
+        return self.issue(account_id, now, "".join(secrets.choice(SHORT_ALPHABET) for _ in range(8)))
+
+    def issue(self, account_id: int, now: datetime, code: str | None = None) -> str:
+        code = code or secrets.token_urlsafe(24)
         with self._lock:
             self._codes = {key: item for key, item in self._codes.items() if item[1] > now}
             if len(self._codes) >= MAX_WAITING:
