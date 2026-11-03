@@ -36,10 +36,12 @@ class AuditQuery:
     end: datetime | None = None
     limit: int = 50
     offset: int = 0
+    actor_ids: frozenset[int] | None = None
 
     def matches(self, entry: AuditEntry) -> bool:
         return (
-            (self.actor_id is None or entry.actor_id == self.actor_id)
+            (self.actor_ids is None or entry.actor_id in self.actor_ids)
+            and (self.actor_id is None or entry.actor_id == self.actor_id)
             and (self.action is None or entry.action is self.action)
             and (self.target_type is None or entry.target_type == self.target_type)
             and (self.target_id is None or entry.target_id == self.target_id)
@@ -101,6 +103,8 @@ class SqlAuditLog:
         conditions: list[ColumnElement[bool]] = [
             AuditLogRow.action.in_([action.value for action in AuditAction]),
         ]
+        if query.actor_ids is not None:
+            conditions.append(AuditLogRow.actor_id.in_(query.actor_ids))
         if query.actor_id is not None:
             conditions.append(AuditLogRow.actor_id == query.actor_id)
         if query.action is not None:
