@@ -26,6 +26,8 @@ class AuditAction(StrEnum):
     LOT_CREATED = "lot.created"
     LOT_UPDATED = "lot.updated"
     LOT_DELETED = "lot.deleted"
+    CAMERA_SAVED = "camera.saved"
+    CAMERA_DELETED = "camera.deleted"
     ZONE_CREATED = "zone.created"
     ZONE_UPDATED = "zone.updated"
     ZONE_DELETED = "zone.deleted"

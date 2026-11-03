@@ -79,6 +79,60 @@ class CameraSourceReport(BaseModel):
         return value
 
 
+class SavedCameraCreate(BaseModel):
+    """A camera someone adds to their account. Saving opens nothing: that takes connecting it."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"name": "Potrero norte", "source": "rtsp://192.168.1.50:554/live"}]},
+    )
+
+    name: str = Field(min_length=1, max_length=80)
+    source: str = Field(min_length=1, max_length=500, description="IP camera link, phone app address or webcam number")
+
+    @field_validator("name", "source", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("source")
+    @classmethod
+    def no_credentials(cls, value: str) -> str:
+        if "@" in urlsplit(value).netloc:
+            raise ValueError("source must not contain credentials")
+        return value
+
+
+class CameraPairing(BaseModel):
+    code: str
+    expires_in: int = Field(description="Seconds the code stays valid")
+
+
+class PairedCameraCreate(SavedCameraCreate):
+    """A camera sent from a phone that scanned the QR: the code says whose it is."""
+
+    code: str = Field(min_length=1, max_length=100)
+
+
+class SavedCamera(BaseModel):
+    id: str
+    name: str
+    source: str
+    account_id: int | None = None
+
+
+class SavedCameraView(BaseModel):
+    id: str
+    name: str
+    source: str
+    status: CameraStatus = Field(description="online only while the AI service is sending it")
+
+
+class SavedCameraList(BaseModel):
+    items: list[SavedCameraView]
+    total: int
+
+
 class CameraRegistration(BaseModel):
     source: str
     active: bool
@@ -100,6 +154,7 @@ class CameraRecord(BaseModel):
 
 class Camera(CameraRecord):
     status: CameraStatus = Field(description="Effective status: offline when the AI service stopped reporting")
+    display_name: str | None = Field(default=None, description="The name its owner gave it")
 
 
 class CameraList(BaseModel):
