@@ -307,3 +307,15 @@ def test_the_posture_reaches_only_the_account_that_owns_the_camera(api, two):
             message = socket.receive_json()
             kinds[message["type"]] = message["data"]
     assert kinds["detections"]["detections"][0]["posture"] == "lying"
+
+def test_the_status_pushed_to_the_owner_keeps_the_cameras_name(api, two):
+    ana, _ = two
+    camera = save(api, ana, name="Corral del ternero")
+    with api.websocket_connect("/ws/live") as socket:
+        socket.send_json({"type": "auth", "token": ana["Authorization"].removeprefix("Bearer ")})
+        socket.receive_json()
+        report = {"status": "online", "observed_at": NOW}
+        assert api.put(f"/api/ai/cameras/{camera}/status", json=report).status_code == 200
+        message = socket.receive_json()
+    assert message["type"] == "camera.status"
+    assert message["data"]["display_name"] == "Corral del ternero"
