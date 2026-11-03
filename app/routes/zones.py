@@ -6,6 +6,8 @@ from app.dependencies import (
     AuditTrail,
     Clock,
     CurrentUser,
+    Scope,
+    Visible,
     current_user,
     get_clock,
     get_zone_store,
@@ -27,8 +29,8 @@ CameraIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za
 ZoneId = Annotated[int, Path(ge=1)]
 
 
-def _found(zone: Zone | None, zone_id: int) -> Zone:
-    if zone is None:
+def _found(zone: Zone | None, zone_id: int, scope: Scope) -> Zone:
+    if zone is None or not scope.sees_camera(zone.camera_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"No zone with id {zone_id}",
         )
@@ -37,6 +39,7 @@ def _found(zone: Zone | None, zone_id: int) -> Zone:
 
 @router.get("", response_model=ZoneList, dependencies=SIGNED_IN)
 def list_zones(
+    scope: Visible,
     camera_id: CameraId | None = None,
     store: ZoneStore = Depends(get_zone_store),
 ) -> ZoneList:
@@ -45,13 +48,13 @@ def list_zones(
     Behind authentication: a zone describes where the farm's animals are meant
     to be, which is not something to publish to an anonymous caller.
     """
-    items = store.list(camera_id)
+    items = [zone for zone in store.list(camera_id) if scope.sees_camera(zone.camera_id)]
     return ZoneList(items=items, total=len(items))
 
 
 @router.get("/{zone_id}", response_model=Zone, dependencies=SIGNED_IN)
-def get_zone(zone_id: ZoneId, store: ZoneStore = Depends(get_zone_store)) -> Zone:
-    return _found(store.get(zone_id), zone_id)
+def get_zone(zone_id: ZoneId, scope: Visible, store: ZoneStore = Depends(get_zone_store)) -> Zone:
+    return _found(store.get(zone_id), zone_id, scope)
 
 
 @router.post(
@@ -62,6 +65,7 @@ def create_zone(
     camera_id: CameraIdPath,
     data: ZoneCreate,
     user: CurrentUser,
+    scope: Visible,
     audit: AuditTrail,
     store: ZoneStore = Depends(get_zone_store),
     clock: Clock = Depends(get_clock),
@@ -77,6 +81,8 @@ def create_zone(
     zone is what the AI service compares every detection against, so a bad one
     either floods the farm with false alerts or stops reporting real escapes.
     """
+    if not scope.sees_camera(camera_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No camera with id {camera_id}")
     try:
         zone = store.create(camera_id, data, clock())
     except ZoneNameTakenError as error:
@@ -96,6 +102,7 @@ def update_zone(
     zone_id: ZoneId,
     data: ZoneUpdate,
     user: CurrentUser,
+    scope: Visible,
     audit: AuditTrail,
     store: ZoneStore = Depends(get_zone_store),
 ) -> Zone:
@@ -104,7 +111,8 @@ def update_zone(
     The geometry is replaced as a whole when sent, because a single corner
     cannot be validated against the others without knowing them.
     """
-    zone = _found(store.update(zone_id, data), zone_id)
+    _found(store.get(zone_id), zone_id, scope)
+    zone = _found(store.update(zone_id, data), zone_id, scope)
     audit.record(
         AuditAction.ZONE_UPDATED, actor_id=user.id, actor_email=user.email,
         target_type="zone", target_id=zone_id, detail={"changed": sorted(data.model_fields_set)},
@@ -114,7 +122,7 @@ def update_zone(
 
 @router.delete("/{zone_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=OWNER_ONLY)
 def delete_zone(
-    zone_id: ZoneId, user: CurrentUser, audit: AuditTrail, store: ZoneStore = Depends(get_zone_store),
+    zone_id: ZoneId, user: CurrentUser, scope: Visible, audit: AuditTrail, store: ZoneStore = Depends(get_zone_store),
 ) -> None:
     """Removes a zone. Owner only.
 
@@ -124,6 +132,7 @@ def delete_zone(
     which one the AI service should use. Deactivating is what `active` is for
     when the zone should be kept.
     """
+    _found(store.get(zone_id), zone_id, scope)
     if not store.delete(zone_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"No zone with id {zone_id}",
