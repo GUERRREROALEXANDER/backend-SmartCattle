@@ -154,3 +154,18 @@ def test_keys_can_be_read_back_only_with_the_secret():
     assert account_of(key, TEST_JWT_SECRET) == 7
     assert account_of(key.replace("farm-7-", "farm-8-"), TEST_JWT_SECRET) is None
     assert account_of(key, TEST_JWT_SECRET + "x") is None
+
+
+def test_reports_from_a_linked_pc_are_not_cut_off_by_the_limits_for_people():
+    settings = Settings(
+        _env_file=None, allowed_origins="https://panel.example", smartcattle_ai_url=None, ai_api_key=SHARED,
+        database_url=None, jwt_secret=TEST_JWT_SECRET, account_isolation=True, rate_limit_enabled=True,
+    )
+    with TestClient(create_app(settings)) as client:
+        owner = sign_up(client, "ana@finca.example")[1]
+        key = link(client, owner)
+        answers = {client.put("/api/ai/farm-pc", json={"url": URL}, headers=key).status_code for _ in range(130)}
+        assert answers == {204}
+        forged = {"X-API-Key": farm_key(1, "otro-secreto-que-no-es-el-del-servidor-en-absoluto")}
+        answers = {client.put("/api/ai/farm-pc", json={"url": URL}, headers=forged).status_code for _ in range(130)}
+        assert 429 in answers

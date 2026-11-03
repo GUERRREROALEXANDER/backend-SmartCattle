@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from typing import Any
 
 from app.core.config import Settings
+from app.services.farm_agents import account_of, is_farm_key
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
@@ -21,8 +22,8 @@ Send = Callable[[Message], Awaitable[None]]
 MAX_BODY_BYTES = 1024 * 1024
 
 #: (requests, seconds). A password check is the most expensive thing a request can ask for, and every new account
-#: adds rows that stay.
-REGISTER_LIMIT = (10, 3600)
+#: adds rows that stay. Enough for a class trying it from one connection, not for a script filling the table.
+REGISTER_LIMIT = (30, 3600)
 LOGIN_LIMIT = (20, 60)
 WRITE_LIMIT = (120, 60)
 #: A dashboard polling several screens, and several people behind one farm connection.
@@ -106,8 +107,12 @@ class GuardMiddleware:
         """The AI service reports every second per camera, from one address, and proves who it is with its key."""
         key = self.settings.ai_api_key
         sent = headers.get("x-api-key")
-        return (path.startswith("/api/ai/") and key is not None and sent is not None
-                and secrets.compare_digest(sent.encode("utf-8"), key.get_secret_value().encode("utf-8")))
+        if not path.startswith("/api/ai/") or sent is None:
+            return False
+        if is_farm_key(sent):
+            secret = self.settings.jwt_secret
+            return secret is not None and account_of(sent, secret.get_secret_value()) is not None
+        return key is not None and secrets.compare_digest(sent.encode("utf-8"), key.get_secret_value().encode("utf-8"))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
