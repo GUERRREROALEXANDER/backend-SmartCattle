@@ -47,7 +47,9 @@ class VideoUploadStore(Protocol):
 
     def get(self, upload_id: UUID) -> StoredVideoUpload | None: ...
 
-    def page(self, status: UploadStatus | None, limit: int, offset: int) -> UploadPage: ...
+    def page(
+        self, status: UploadStatus | None, limit: int, offset: int, uploaded_by: frozenset[int] | None = None,
+    ) -> UploadPage: ...
 
     def change(
         self, upload_id: UUID, allowed_from: frozenset[UploadStatus], changes: dict[str, Any],
@@ -99,10 +101,16 @@ class InMemoryVideoUploadStore:
         with self._lock:
             return self._uploads.get(upload_id)
 
-    def page(self, status: UploadStatus | None, limit: int, offset: int) -> UploadPage:
+    def page(
+        self, status: UploadStatus | None, limit: int, offset: int, uploaded_by: frozenset[int] | None = None,
+    ) -> UploadPage:
         with self._lock:
             matching = sorted(
-                (upload for upload in self._uploads.values() if status is None or upload.status is status),
+                (
+                    upload for upload in self._uploads.values()
+                    if (status is None or upload.status is status)
+                    and (uploaded_by is None or upload.uploaded_by in uploaded_by)
+                ),
                 key=_oldest_first, reverse=True,
             )
         return UploadPage(items=matching[offset:offset + limit], total=len(matching))
@@ -173,8 +181,12 @@ class SqlVideoUploadStore:
             row = session.get(VideoUploadRow, upload_id)
             return None if row is None else _to_upload(row)
 
-    def page(self, status: UploadStatus | None, limit: int, offset: int) -> UploadPage:
+    def page(
+        self, status: UploadStatus | None, limit: int, offset: int, uploaded_by: frozenset[int] | None = None,
+    ) -> UploadPage:
         conditions = [] if status is None else [VideoUploadRow.status == status.value]
+        if uploaded_by is not None:
+            conditions.append(VideoUploadRow.uploaded_by.in_(uploaded_by))
         rows = (
             select(VideoUploadRow).where(*conditions)
             .order_by(VideoUploadRow.created_at.desc(), VideoUploadRow.id.desc()).limit(limit).offset(offset)

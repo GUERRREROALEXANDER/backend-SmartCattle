@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
-from app.dependencies import AuditTrail, Clock, OwnerUser, get_clock, get_user_store
+from app.dependencies import AuditTrail, Clock, OwnerUser, Visible, get_clock, get_user_store
 from app.schemas.audit import AuditAction
 from app.schemas.auth import User, UserRole
 from app.schemas.user import UserAccountCreate, UserList, UserUpdate
@@ -36,6 +36,7 @@ def _not_found(user_id: int) -> HTTPException:
 @router.get("", response_model=UserList)
 def list_users(
     _owner: OwnerUser,
+    scope: Visible,
     store: Store,
     role: UserRole | None = None,
     is_active: bool | None = None,
@@ -43,7 +44,9 @@ def list_users(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> UserList:
     """The accounts, oldest first. Owner only: the list is the staff's email addresses."""
-    page = store.page(UserQuery(role=role, is_active=is_active, limit=limit, offset=offset))
+    page = store.page(UserQuery(
+        account_id=scope.account_id, role=role, is_active=is_active, limit=limit, offset=offset,
+    ))
     return UserList(items=[_public(user) for user in page.items], total=page.total)
 
 
@@ -55,7 +58,7 @@ def create_user(data: UserAccountCreate, owner: OwnerUser, store: Store, clock: 
     user, and a token for someone else would be a credential nobody asked for.
     """
     try:
-        created = store.create(data, data.role, clock())
+        created = store.create(data, data.role, clock(), owner.account_id)
     except EmailAlreadyRegisteredError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="That email is already registered",
@@ -68,22 +71,24 @@ def create_user(data: UserAccountCreate, owner: OwnerUser, store: Store, clock: 
 
 
 @router.get("/{user_id}", response_model=User)
-def get_user(user_id: UserId, _owner: OwnerUser, store: Store) -> User:
+def get_user(user_id: UserId, _owner: OwnerUser, scope: Visible, store: Store) -> User:
     user = store.by_id(user_id)
-    if user is None:
+    if user is None or not scope.sees_user(user_id):
         raise _not_found(user_id)
     return _public(user)
 
 
 @router.patch("/{user_id}", response_model=User)
 def update_user(
-    user_id: UserId, data: UserUpdate, owner: OwnerUser, store: Store, clock: Now, audit: AuditTrail,
+    user_id: UserId, data: UserUpdate, owner: OwnerUser, scope: Visible, store: Store, clock: Now, audit: AuditTrail,
 ) -> User:
     """Renames, promotes, demotes, deactivates or reactivates an account.
 
     Takes effect on that user's next request, because every request re-reads
     the account rather than trusting the role in the token.
     """
+    if not scope.sees_user(user_id):
+        raise _not_found(user_id)
     try:
         updated = store.update(user_id, data, clock())
     except LastOwnerError as error:

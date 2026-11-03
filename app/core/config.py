@@ -33,6 +33,19 @@ class Settings(BaseSettings):
     # needs a table, and what this blocks is a fast loop, not a patient one.
     max_login_attempts: int = Field(default=5, ge=3, le=50)
     login_lockout_seconds: int = Field(default=300, ge=30, le=3600)
+    # Per-address request limits (app/guard.py). On unless switched off.
+    rate_limit_enabled: bool = True
+    # Only where a proxy sets the client's address (Render): elsewhere those headers are the client's own words.
+    trust_proxy_headers: bool = False
+    # The first account can always be created, so that an owner exists. After it, off means that only the owner
+    # creates accounts: on the internet, an open form hands the dashboard to anyone who finds it.
+    public_registration: bool = True
+    # Each registered person gets a space of their own, and everything but the health check needs a session.
+    # Off is the old single-farm behaviour: every account shares the one farm.
+    account_isolation: bool = True
+    # Off leaves the herd, the events and the camera list readable without a session.
+    require_auth_for_reads: bool = False
+    api_docs_enabled: bool = True
     # S3-compatible bucket for uploaded videos (Cloudflare R2; moto locally). All four
     # or none: unset means the upload endpoints answer 503, like auth does.
     video_storage_endpoint: AnyHttpUrl | None = None

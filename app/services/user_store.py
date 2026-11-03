@@ -44,10 +44,13 @@ class StoredUser(User):
     """
 
     password_hash: str
+    # Whose space this account works in. Not in User: nobody needs it in a response.
+    account_id: int
 
 
 @dataclass(frozen=True)
 class UserQuery:
+    account_id: int | None = None
     role: UserRole | None = None
     is_active: bool | None = None
     limit: int = 50
@@ -61,7 +64,13 @@ class UserPage:
 
 
 class UserStore(Protocol):
-    def create(self, data: UserCreate, role: UserRole, created_at: datetime) -> StoredUser: ...
+    def create(
+        self, data: UserCreate, role: UserRole, created_at: datetime, account_id: int | None = None,
+    ) -> StoredUser:
+        """account_id None starts a new space, owned by this account."""
+        ...
+
+    def ids_in_account(self, account_id: int) -> frozenset[int]: ...
 
     def by_email(self, email: str) -> StoredUser | None: ...
 
@@ -105,7 +114,13 @@ class InMemoryUserStore:
         self._next_id = 1
         self._lock = Lock()
 
-    def create(self, data: UserCreate, role: UserRole, created_at: datetime) -> StoredUser:
+    def ids_in_account(self, account_id: int) -> frozenset[int]:
+        with self._lock:
+            return frozenset(user.id for user in self._by_id.values() if user.account_id == account_id)
+
+    def create(
+        self, data: UserCreate, role: UserRole, created_at: datetime, account_id: int | None = None,
+    ) -> StoredUser:
         # Hash outside the lock: bcrypt at cost 12 takes around a tenth of a
         # second, and holding the lock for it would serialise every other
         # request touching this store.
@@ -117,6 +132,7 @@ class InMemoryUserStore:
                 id=self._next_id, email=data.email, full_name=data.full_name,
                 role=role, is_active=True, created_at=created_at,
                 last_login_at=None, password_hash=password_hash,
+                account_id=self._next_id if account_id is None else account_id,
             )
             self._by_id[user.id] = user
             self._next_id += 1
@@ -144,7 +160,8 @@ class InMemoryUserStore:
         with self._lock:
             matching = [
                 self._by_id[key] for key in sorted(self._by_id)
-                if (query.role is None or self._by_id[key].role is query.role)
+                if (query.account_id is None or self._by_id[key].account_id == query.account_id)
+                and (query.role is None or self._by_id[key].role is query.role)
                 and (query.is_active is None or self._by_id[key].is_active == query.is_active)
             ]
         return UserPage(items=matching[query.offset:query.offset + query.limit], total=len(matching))
@@ -156,7 +173,8 @@ class InMemoryUserStore:
             if current is None:
                 return None
             if _removes_an_owner(current, data) and not any(
-                user.id != user_id and user.role is UserRole.OWNER and user.is_active
+                user.id != user_id and user.account_id == current.account_id
+                and user.role is UserRole.OWNER and user.is_active
                 for user in self._by_id.values()
             ):
                 raise LastOwnerError(user_id)
@@ -179,7 +197,7 @@ def _to_user(row: UserRow) -> StoredUser:
         id=row.id, email=row.email, full_name=row.full_name,
         role=UserRole(row.role), is_active=row.is_active,
         created_at=created_at, last_login_at=_aware(row.last_login_at),
-        password_hash=row.password_hash,
+        password_hash=row.password_hash, account_id=row.account_id or row.id,
     )
 
 
@@ -187,16 +205,24 @@ class SqlUserStore:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
-    def create(self, data: UserCreate, role: UserRole, created_at: datetime) -> StoredUser:
+    def ids_in_account(self, account_id: int) -> frozenset[int]:
+        with self._sessions() as session:
+            return frozenset(session.scalars(select(UserRow.id).where(UserRow.account_id == account_id)))
+
+    def create(
+        self, data: UserCreate, role: UserRole, created_at: datetime, account_id: int | None = None,
+    ) -> StoredUser:
         password_hash = hash_password(data.password)
         row = UserRow(
             email=data.email, password_hash=password_hash, full_name=data.full_name,
-            role=role.value, is_active=True, created_at=created_at, updated_at=created_at,
+            role=role.value, is_active=True, created_at=created_at, updated_at=created_at, account_id=account_id,
         )
         try:
             with self._sessions.begin() as session:
                 session.add(row)
                 session.flush()
+                if row.account_id is None:
+                    row.account_id = row.id
                 return _to_user(row)
         except IntegrityError as error:
             if not is_unique_violation(error):
@@ -228,6 +254,8 @@ class SqlUserStore:
 
     def page(self, query: UserQuery) -> UserPage:
         conditions = []
+        if query.account_id is not None:
+            conditions.append(UserRow.account_id == query.account_id)
         if query.role is not None:
             conditions.append(UserRow.role == query.role.value)
         if query.is_active is not None:
@@ -251,6 +279,7 @@ class SqlUserStore:
                 other_owner = session.scalars(
                     select(UserRow.id).where(
                         UserRow.role == UserRole.OWNER.value, UserRow.is_active.is_(True), UserRow.id != user_id,
+                        UserRow.account_id == row.account_id,
                     ).limit(1).with_for_update()
                 ).first()
                 if other_owner is None:

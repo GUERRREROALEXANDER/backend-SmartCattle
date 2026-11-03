@@ -83,3 +83,13 @@ Cloud Run, a VPS). It listens on `$PORT` (default 8000), runs as a non-root
 user, has a `HEALTHCHECK` on `/health`, and applies migrations on start
 when `DATABASE_URL` is set. Pass the same environment variables as in
 `.env.example`, and keep one instance for the reason above.
+
+## Restrictions on the internet
+
+render.yaml turns these on. Per-address limits (`app/guard.py`) answer 429 with Retry-After; `/health` and the AI service with its key are exempt.
+
+- `PUBLIC_REGISTRATION=false`: after the first account, which is the owner, only the owner creates accounts (`POST /api/users`). **Register the owner immediately after the first deploy on an empty database.**
+- `REQUIRE_AUTH_FOR_READS=true`: the herd, events, cameras and metrics need a session.
+- `API_DOCS_ENABLED=false`: no `/docs` or `/openapi.json`.
+- `TRUST_PROXY_HEADERS=true`: only behind Render and Cloudflare, which set the client's address.
+- `/ws/live`: 200 sockets, 20 per address.

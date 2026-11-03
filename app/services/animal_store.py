@@ -30,13 +30,15 @@ class TagAlreadyRegisteredError(Exception):
 
 
 class AnimalStore(Protocol):
-    def create(self, data: AnimalCreate, now: datetime) -> Animal: ...
+    def create(self, data: AnimalCreate, now: datetime, account_id: int | None = None) -> Animal: ...
+
+    def account_of(self, tag: str) -> int | None: ...
 
     def update(self, tag: str, data: AnimalUpdate, now: datetime) -> Animal | None: ...
 
     def get(self, tag: str) -> Animal | None: ...
 
-    def list(self, status: AnimalStatus | None = None) -> Animals: ...
+    def list(self, status: AnimalStatus | None = None, account_id: int | None = None) -> Animals: ...
 
     def record_detection(self, tag: str, camera_id: str | None, when: datetime) -> Animal | None: ...
 
@@ -53,9 +55,14 @@ class InMemoryAnimalStore:
 
     def __init__(self) -> None:
         self._animals: dict[str, Animal] = {}
+        self._accounts: dict[str, int] = {}
         self._lock = Lock()
 
-    def create(self, data: AnimalCreate, now: datetime) -> Animal:
+    def account_of(self, tag: str) -> int | None:
+        with self._lock:
+            return self._accounts.get(tag)
+
+    def create(self, data: AnimalCreate, now: datetime, account_id: int | None = None) -> Animal:
         with self._lock:
             if data.tag in self._animals:
                 raise TagAlreadyRegisteredError(data.tag)
@@ -63,6 +70,8 @@ class InMemoryAnimalStore:
                 **data.model_dump(), last_detection=None, created_at=now, updated_at=now,
             )
             self._animals[animal.tag] = animal
+            if account_id is not None:
+                self._accounts[animal.tag] = account_id
             return animal
 
     def update(self, tag: str, data: AnimalUpdate, now: datetime) -> Animal | None:
@@ -81,11 +90,12 @@ class InMemoryAnimalStore:
         with self._lock:
             return self._animals.get(tag)
 
-    def list(self, status: AnimalStatus | None = None) -> Animals:
+    def list(self, status: AnimalStatus | None = None, account_id: int | None = None) -> Animals:
         with self._lock:
             return [
                 self._animals[tag] for tag in sorted(self._animals)
-                if status is None or self._animals[tag].status is status
+                if (status is None or self._animals[tag].status is status)
+                and (account_id is None or self._accounts.get(tag) == account_id)
             ]
 
     def record_detection(self, tag: str, camera_id: str | None, when: datetime) -> Animal | None:
@@ -124,14 +134,18 @@ class SqlAnimalStore:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
-    def create(self, data: AnimalCreate, now: datetime) -> Animal:
+    def account_of(self, tag: str) -> int | None:
+        with self._sessions() as session:
+            return session.scalar(select(AnimalRow.account_id).where(AnimalRow.tag == tag))
+
+    def create(self, data: AnimalCreate, now: datetime, account_id: int | None = None) -> Animal:
         try:
             with self._sessions.begin() as session:
                 camera = camera_row(session, data.camera_id) if data.camera_id else None
                 row = AnimalRow(
                     tag=data.tag, name=data.name, status=data.status.value,
                     camera_id=camera.id if camera else None,
-                    created_at=now, updated_at=now,
+                    created_at=now, updated_at=now, account_id=account_id,
                 )
                 session.add(row)
                 session.flush()
@@ -168,7 +182,7 @@ class SqlAnimalStore:
             row = session.get(AnimalRow, tag)
             return None if row is None else _to_animal(row, self._camera_name(session, row))
 
-    def list(self, status: AnimalStatus | None = None) -> Animals:
+    def list(self, status: AnimalStatus | None = None, account_id: int | None = None) -> Animals:
         query = (
             select(AnimalRow, CameraRow.name)
             .outerjoin(CameraRow, AnimalRow.camera_id == CameraRow.id)
@@ -176,6 +190,8 @@ class SqlAnimalStore:
         )
         if status is not None:
             query = query.where(AnimalRow.status == status.value)
+        if account_id is not None:
+            query = query.where(AnimalRow.account_id == account_id)
         with self._sessions() as session:
             # outerjoin, not join: camera_id is nullable, and an inner join
             # would silently hide every animal nobody has located yet.

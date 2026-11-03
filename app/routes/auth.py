@@ -19,7 +19,7 @@ from app.schemas.auth import LoginRequest, TokenResponse, User, UserCreate, User
 from app.schemas.user import PasswordChange
 from app.services.audit_log import Auditor
 from app.services.login_throttle import LoginThrottle
-from app.services.user_store import EmailAlreadyRegisteredError, StoredUser, UserStore
+from app.services.user_store import EmailAlreadyRegisteredError, StoredUser, UserQuery, UserStore
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -52,13 +52,24 @@ def register(
 ) -> TokenResponse:
     """Creates an account and signs it in.
 
-    The first account registered becomes the owner, because somebody has to be
-    and there is no other channel to grant it. Every account after it is a
-    worker; an owner promotes one through PATCH /api/users/{id}.
+    Each one owns a new, empty space: registering never joins someone else's
+    farm. An owner adds staff to theirs through POST /api/users. Without account
+    separation there is one farm: the first account owns it, the rest are workers.
     """
-    role = UserRole.OWNER if store.count() == 0 else UserRole.WORKER
+    first = store.count() == 0
+    if not first and not settings.public_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is closed; ask the farm's owner for an account",
+        )
+    own_space = first or settings.account_isolation
+    role = UserRole.OWNER if own_space else UserRole.WORKER
+    account_id = None
+    if not own_space:
+        owners = store.page(UserQuery(role=UserRole.OWNER, limit=1)).items
+        account_id = owners[0].account_id if owners else None
     try:
-        user = store.create(data, role, clock())
+        user = store.create(data, role, clock(), account_id)
     except EmailAlreadyRegisteredError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

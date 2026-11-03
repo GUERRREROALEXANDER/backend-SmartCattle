@@ -9,11 +9,20 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionFactory
 from app.models import CameraRow, CameraStatusChangeRow
-from app.schemas.camera import CameraRecord, CameraStatus, CameraStatusReport, apply_report
+from app.schemas.camera import (
+    CameraRecord,
+    CameraRegistration,
+    CameraSourceReport,
+    CameraStatus,
+    CameraStatusReport,
+    SavedCamera,
+    apply_report,
+)
 from app.schemas.report import CameraStatusChange
 
 # Module-level alias: inside the store classes `list` names their method.
 Changes = list[CameraStatusChange]
+SavedCameras = list[SavedCamera]
 
 # Copied verbatim from the record onto the row; reported_status needs .value.
 REPORTED_FIELDS = (
@@ -26,6 +35,30 @@ class CameraStore(Protocol):
     def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord: ...
 
     def list(self) -> list[CameraRecord]: ...
+
+    def register(self, camera_id: str, report: CameraSourceReport) -> None: ...
+
+    def registration(self, camera_id: str) -> CameraRegistration | None: ...
+
+    def save(self, camera: SavedCamera) -> None: ...
+
+    def saved(self, account_id: int | None) -> SavedCameras:
+        """The cameras saved on the Cameras page; those of one account, or all of them with None."""
+        ...
+
+    def saved_one(self, camera_id: str) -> SavedCamera | None: ...
+
+    def forget(self, camera_id: str) -> None:
+        """Takes it off the Cameras page. Its history stays with the account."""
+        ...
+
+    def owner_of(self, camera_id: str) -> int | None: ...
+
+    def camera_ids(self, account_id: int) -> frozenset[str]:
+        """Every camera whose data belongs to this account, saved now or not."""
+        ...
+
+    def assign(self, camera_id: str, account_id: int) -> None: ...
 
     def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
         """Changes in [start, end), oldest first."""
@@ -55,6 +88,9 @@ class InMemoryCameraStore:
     def __init__(self) -> None:
         self._cameras: dict[str, CameraRecord] = {}
         self._changes: Changes = []
+        self._registrations: dict[str, CameraRegistration] = {}
+        self._saved: dict[str, SavedCamera] = {}
+        self._owners: dict[str, int] = {}
         self._lock = Lock()
 
     def report(self, camera_id: str, report: CameraStatusReport, received_at: datetime) -> CameraRecord:
@@ -68,7 +104,48 @@ class InMemoryCameraStore:
 
     def list(self) -> list[CameraRecord]:
         with self._lock:
-            return [self._cameras[key] for key in sorted(self._cameras)]
+            removed = {key for key, item in self._registrations.items() if not item.active}
+            return [self._cameras[key] for key in sorted(self._cameras) if key not in removed]
+
+    def register(self, camera_id: str, report: CameraSourceReport) -> None:
+        with self._lock:
+            self._registrations[camera_id] = CameraRegistration(source=report.source, active=report.active)
+
+    def registration(self, camera_id: str) -> CameraRegistration | None:
+        with self._lock:
+            return self._registrations.get(camera_id)
+
+    def save(self, camera: SavedCamera) -> None:
+        with self._lock:
+            self._saved[camera.id] = camera
+            if camera.account_id is not None:
+                self._owners[camera.id] = camera.account_id
+
+    def saved(self, account_id: int | None) -> SavedCameras:
+        with self._lock:
+            return [item for item in self._saved.values() if account_id is None or item.account_id == account_id]
+
+    def saved_one(self, camera_id: str) -> SavedCamera | None:
+        with self._lock:
+            return self._saved.get(camera_id)
+
+    def forget(self, camera_id: str) -> None:
+        with self._lock:
+            self._saved.pop(camera_id, None)
+            if camera_id in self._registrations:
+                self._registrations[camera_id] = self._registrations[camera_id].model_copy(update={"active": False})
+
+    def owner_of(self, camera_id: str) -> int | None:
+        with self._lock:
+            return self._owners.get(camera_id)
+
+    def camera_ids(self, account_id: int) -> frozenset[str]:
+        with self._lock:
+            return frozenset(key for key, owner in self._owners.items() if owner == account_id)
+
+    def assign(self, camera_id: str, account_id: int) -> None:
+        with self._lock:
+            self._owners[camera_id] = account_id
 
     def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
         with self._lock:
@@ -93,11 +170,13 @@ def _reported_rows() -> Select[CameraRow]:
     database/schema.sql, and the ones camera_row() creates the first time an
     event names a camera. Both status columns stay NULL there, and a camera
     with no status cannot be described by CameraRecord, so it is left out
-    rather than reported as a guess.
+    rather than reported as a guess. A camera removed from the dashboard is
+    left out too; its row stays because its history points at it.
     """
     return select(CameraRow).where(
         CameraRow.last_report_at.is_not(None),
         CameraRow.reported_status.is_not(None),
+        CameraRow.active.is_(True),
     )
 
 
@@ -110,6 +189,11 @@ def _to_record(row: CameraRow) -> CameraRecord:
         last_error=row.last_error, frame_width=row.frame_width, frame_height=row.frame_height, fps=row.fps,
         stream_url=row.stream_url,
     )
+
+
+def _to_saved(row: CameraRow) -> SavedCamera:
+    assert row.display_name is not None  # noqa: S101 - the queries ask for it
+    return SavedCamera(id=row.name, name=row.display_name, source=row.source, account_id=row.account_id)
 
 
 def _aware_required(value: datetime) -> datetime:
@@ -146,6 +230,53 @@ class SqlCameraStore:
         query = _reported_rows().order_by(CameraRow.name)
         with self._sessions() as session:
             return [_to_record(row) for row in session.scalars(query)]
+
+    def register(self, camera_id: str, report: CameraSourceReport) -> None:
+        with self._sessions.begin() as session:
+            row = camera_row(session, camera_id, lock=True)
+            row.source, row.active = report.source, report.active
+
+    def registration(self, camera_id: str) -> CameraRegistration | None:
+        query = select(CameraRow).where(CameraRow.name == camera_id)
+        with self._sessions() as session:
+            row = session.scalars(query).first()
+            return None if row is None else CameraRegistration(source=row.source, active=row.active)
+
+    def save(self, camera: SavedCamera) -> None:
+        with self._sessions.begin() as session:
+            row = camera_row(session, camera.id, lock=True)
+            row.source, row.display_name, row.account_id = camera.source, camera.name, camera.account_id
+
+    def saved(self, account_id: int | None) -> SavedCameras:
+        query = select(CameraRow).where(CameraRow.display_name.is_not(None)).order_by(CameraRow.id)
+        if account_id is not None:
+            query = query.where(CameraRow.account_id == account_id)
+        with self._sessions() as session:
+            return [_to_saved(row) for row in session.scalars(query)]
+
+    def saved_one(self, camera_id: str) -> SavedCamera | None:
+        query = select(CameraRow).where(CameraRow.name == camera_id, CameraRow.display_name.is_not(None))
+        with self._sessions() as session:
+            row = session.scalars(query).first()
+            return None if row is None else _to_saved(row)
+
+    def forget(self, camera_id: str) -> None:
+        with self._sessions.begin() as session:
+            row = session.scalars(select(CameraRow).where(CameraRow.name == camera_id).with_for_update()).first()
+            if row is not None:
+                row.display_name, row.active = None, False
+
+    def owner_of(self, camera_id: str) -> int | None:
+        with self._sessions() as session:
+            return session.scalar(select(CameraRow.account_id).where(CameraRow.name == camera_id))
+
+    def camera_ids(self, account_id: int) -> frozenset[str]:
+        with self._sessions() as session:
+            return frozenset(session.scalars(select(CameraRow.name).where(CameraRow.account_id == account_id)))
+
+    def assign(self, camera_id: str, account_id: int) -> None:
+        with self._sessions.begin() as session:
+            camera_row(session, camera_id, lock=True).account_id = account_id
 
     def status_changes(self, camera_id: str | None, start: datetime, end: datetime) -> Changes:
         query = (
