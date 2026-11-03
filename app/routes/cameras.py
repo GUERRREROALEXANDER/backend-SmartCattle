@@ -17,7 +17,7 @@ from app.dependencies import (
     get_clock,
     get_occupancy_store,
     get_zone_store,
-    verify_api_key,
+    verify_camera_reporter,
 )
 from app.schemas.audit import AuditAction
 from app.schemas.camera import (
@@ -209,7 +209,7 @@ def get_camera(
     return _camera(record, now, settings, _saved_name(store, camera_id))
 
 
-@router.put("/api/ai/cameras/{camera_id}/status", response_model=Camera, dependencies=[Depends(verify_api_key)])
+@router.put("/api/ai/cameras/{camera_id}/status", response_model=Camera, dependencies=[Depends(verify_camera_reporter)])
 def report_camera_status(
     camera_id: CameraId,
     report: CameraStatusReport,
@@ -231,7 +231,7 @@ def report_camera_status(
 
 @router.put(
     "/api/ai/cameras/{camera_id}/source", status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_camera_reporter)],
 )
 def register_camera_source(
     camera_id: CameraId,
@@ -251,7 +251,9 @@ def register_camera_source(
         broadcaster.publish("camera.removed", {"id": camera_id}, clock(), account_id=store.owner_of(camera_id))
 
 
-@router.get("/api/ai/cameras/{camera_id}/zones", response_model=ZoneList, dependencies=[Depends(verify_api_key)])
+@router.get(
+    "/api/ai/cameras/{camera_id}/zones", response_model=ZoneList, dependencies=[Depends(verify_camera_reporter)],
+)
 def camera_safe_zones(camera_id: CameraId, store: ZoneStore = Depends(get_zone_store)) -> ZoneList:
     """The active safe zones of one camera, for the AI service.
 
@@ -267,7 +269,7 @@ def camera_safe_zones(camera_id: CameraId, store: ZoneStore = Depends(get_zone_s
 
 @router.put(
     "/api/ai/cameras/{camera_id}/occupancy", status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_camera_reporter)],
 )
 def report_occupancy(
     camera_id: CameraId,

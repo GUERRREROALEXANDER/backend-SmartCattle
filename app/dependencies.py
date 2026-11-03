@@ -30,6 +30,7 @@ from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import CameraStore
 from app.services.catalog_store import CatalogStore
 from app.services.event_store import EventStore
+from app.services.farm_agents import FarmServices, account_of, is_farm_key
 from app.services.farm_store import FarmStore
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import OccupancyStore
@@ -148,6 +149,16 @@ def get_auditor(
     return Auditor(log=log, now=clock(), ip_address=None if request.client is None else request.client.host)
 
 
+def get_farm_pairings(request: Request) -> CameraPairings:
+    pairings: CameraPairings = request.app.state.farm_pairings
+    return pairings
+
+
+def get_farm_services(request: Request) -> FarmServices:
+    services: FarmServices = request.app.state.farm_services
+    return services
+
+
 def get_camera_pairings(request: Request) -> CameraPairings:
     pairings: CameraPairings = request.app.state.camera_pairings
     return pairings
@@ -171,6 +182,30 @@ def verify_api_key(
         return
     expected = settings.ai_api_key.get_secret_value()
     if api_key is None or not secrets.compare_digest(api_key.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def reporter_account(
+    settings: Settings = Depends(get_app_settings),
+    api_key: str | None = Security(api_key_header),
+) -> int | None:
+    """The account of the farm PC making this request; None for the shared key of a service of your own."""
+    if not is_farm_key(api_key):
+        verify_api_key(settings, api_key)
+        return None
+    account = None if settings.jwt_secret is None else account_of(str(api_key), settings.jwt_secret.get_secret_value())
+    if account is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return account
+
+
+def verify_camera_reporter(
+    request: Request,
+    account: int | None = Depends(reporter_account),
+    cameras: CameraStore = Depends(get_camera_store),
+) -> None:
+    """A farm PC only reports on the cameras of its own account."""
+    if account is not None and cameras.owner_of(request.path_params["camera_id"]) != account:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 

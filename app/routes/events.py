@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.dependencies import (
     Clock,
@@ -10,7 +10,7 @@ from app.dependencies import (
     get_camera_store,
     get_clock,
     get_event_store,
-    verify_api_key,
+    reporter_account,
 )
 from app.schemas.event import AIEventCreate, Event, EventLevel, EventList, EventType
 from app.services.alert_store import AlertStore
@@ -53,9 +53,10 @@ def list_events(
     return EventList(items=page.items, total=page.total)
 
 
-@router.post("/api/ai/events", response_model=Event, status_code=201, dependencies=[Depends(verify_api_key)])
+@router.post("/api/ai/events", response_model=Event, status_code=201)
 def create_event(
     data: AIEventCreate,
+    reporter: int | None = Depends(reporter_account),
     store: EventStore = Depends(get_event_store),
     alerts: AlertStore = Depends(get_alert_store),
     cameras: CameraStore = Depends(get_camera_store),
@@ -70,6 +71,9 @@ def create_event(
     footage; alerting on them would sound an alarm for something that already
     happened.
     """
+    # A farm PC only speaks for its own cameras.
+    if reporter is not None and cameras.owner_of(data.camera_id) != reporter:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     now = clock()
     event = store.add(data, now)
     alert = alerts.raise_for(event, now)
