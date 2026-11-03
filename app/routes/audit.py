@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.core.time_window import as_utc
-from app.dependencies import OwnerUser, get_audit_log
+from app.dependencies import OwnerUser, Visible, get_audit_log
 from app.schemas.audit import AuditAction, AuditPage
 from app.services.audit_log import AuditLog, AuditQuery
 
@@ -17,6 +17,7 @@ MAX_LIMIT = 200
 @router.get("", response_model=AuditPage)
 def list_audit_log(
     _owner: OwnerUser,
+    scope: Visible,
     log: Annotated[AuditLog, Depends(get_audit_log)],
     actor_id: Annotated[int | None, Query(ge=1)] = None,
     action: AuditAction | None = None,
@@ -33,5 +34,5 @@ def list_audit_log(
     """
     return log.page(AuditQuery(
         actor_id=actor_id, action=action, target_type=target_type, target_id=target_id,
-        start=as_utc(start), end=as_utc(end), limit=limit, offset=offset,
+        start=as_utc(start), end=as_utc(end), limit=limit, offset=offset, actor_ids=scope.user_ids,
     ))
