@@ -25,6 +25,7 @@ from app.routes import (
     cameras,
     catalogs,
     events,
+    farm,
     farms,
     health,
     live,
@@ -44,6 +45,7 @@ from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
+from app.services.farm_agents import FarmServices
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
@@ -118,6 +120,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Per process, not per worker: the lockout is best effort, and Render's
     # free plan runs one worker anyway.
     app.state.camera_pairings = CameraPairings()
+    # Apart from the QR's codes: a phone's QR can be photographed, and it must not be able to link a PC.
+    app.state.farm_pairings = CameraPairings()
+    app.state.farm_services = FarmServices()
     app.state.login_throttle = LoginThrottle(
         max_attempts=settings.max_login_attempts,
         lockout=timedelta(seconds=settings.login_lockout_seconds),
@@ -152,6 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(animals.router, dependencies=private_reads)
     app.include_router(events.router, dependencies=private_reads)
     app.include_router(cameras.router, dependencies=private_reads)
+    app.include_router(farm.router)
     app.include_router(alerts.router)
     app.include_router(live.router)
     app.include_router(zones.router)
