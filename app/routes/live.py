@@ -96,7 +96,8 @@ async def live(websocket: WebSocket) -> None:
         user = await _authenticate(websocket, settings, clock)
         if user is None:
             return
-        with broadcaster.subscribe() as subscription:
+        account = user.account_id if settings.account_isolation else None
+        with broadcaster.subscribe(account) as subscription:
             subscription.offer(envelope("hello", {"user_id": user.id, "role": user.role.value}, clock()))
             sender = asyncio.create_task(_forward(websocket, subscription))
             try:

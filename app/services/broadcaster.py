@@ -34,7 +34,8 @@ def envelope(kind: str, data: object, sent_at: datetime) -> Message:
 class Subscription:
     """One consumer's bounded queue, bound to the event loop that reads it."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, size: int) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop, size: int, account_id: int | None = None) -> None:
+        self.account_id = account_id
         self._loop = loop
         self._queue: asyncio.Queue[Message] = asyncio.Queue(maxsize=size)
         self.dropped = 0
@@ -67,9 +68,12 @@ class Broadcaster:
             return len(self._subscriptions)
 
     @contextmanager
-    def subscribe(self) -> Iterator[Subscription]:
-        """Registers a consumer for the duration of the block. Call from the event loop."""
-        subscription = Subscription(asyncio.get_running_loop(), self._queue_size)
+    def subscribe(self, account_id: int | None = None) -> Iterator[Subscription]:
+        """Registers a consumer for the duration of the block. Call from the event loop.
+
+        With an account it only receives that account's messages; without one, every message.
+        """
+        subscription = Subscription(asyncio.get_running_loop(), self._queue_size, account_id)
         with self._lock:
             self._subscriptions.add(subscription)
         try:
@@ -78,14 +82,14 @@ class Broadcaster:
             with self._lock:
                 self._subscriptions.discard(subscription)
 
-    def publish(self, kind: str, data: object, sent_at: datetime) -> None:
-        """Sends a message to every current subscriber.
+    def publish(self, kind: str, data: object, sent_at: datetime, account_id: int | None = None) -> None:
+        """Sends a message to the subscribers of this account, and to those not limited to one.
 
         Safe from the worker threads FastAPI runs synchronous handlers on.
         With nobody listening it returns before serialising anything.
         """
         with self._lock:
-            targets = list(self._subscriptions)
+            targets = [item for item in self._subscriptions if item.account_id in (None, account_id)]
         if not targets:
             return
         message = envelope(kind, data, sent_at)
