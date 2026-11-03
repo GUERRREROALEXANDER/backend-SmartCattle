@@ -5,12 +5,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
+from app.core.config import Settings
 from app.dependencies import (
     Clock,
+    get_app_settings,
     get_broadcaster,
+    get_camera_store,
     get_clock,
     get_event_store,
     get_farm_store,
+    get_user_store,
     get_video_analysis_store,
     get_video_upload_store,
     require_video_storage,
@@ -27,8 +31,10 @@ from app.schemas.video_upload import (
     VideoUpload,
 )
 from app.services.broadcaster import Broadcaster
+from app.services.camera_store import CameraStore
 from app.services.event_store import EventStore
 from app.services.farm_store import FarmStore
+from app.services.user_store import UserStore
 from app.services.video_analysis_recording import record_analysis
 from app.services.video_analysis_store import VideoAnalysisStore
 from app.services.video_storage import VideoStorage
@@ -39,8 +45,15 @@ router = APIRouter(prefix="/api/ai/video-jobs", tags=["video jobs"], dependencie
 Store = Annotated[VideoUploadStore, Depends(get_video_upload_store)]
 Hub = Annotated[Broadcaster, Depends(get_broadcaster)]
 Now = Annotated[Clock, Depends(get_clock)]
+Users = Annotated[UserStore, Depends(get_user_store)]
 
 PROCESSING = frozenset({UploadStatus.PROCESSING})
+
+
+def _account(users: UserStore, job: StoredVideoUpload) -> int | None:
+    """The account a video belongs to: its progress goes to that account's dashboards only."""
+    uploader = users.by_id(job.uploaded_by)
+    return None if uploader is None else uploader.account_id
 
 
 def _advance(store: VideoUploadStore, job_id: UUID, changes: dict[str, Any]) -> StoredVideoUpload:
@@ -61,6 +74,7 @@ def claim_job(
     store: Store,
     hub: Hub,
     clock: Now,
+    users: Users,
     storage: VideoStorage = Depends(require_video_storage),
     farms: FarmStore = Depends(get_farm_store),
 ) -> VideoJob | Response:
@@ -75,7 +89,7 @@ def claim_job(
     if job is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     lot = None if job.lot_id is None else farms.get_lot(job.lot_id)
-    hub.publish("video.updated", job.public(), now)
+    hub.publish("video.updated", job.public(), now, account_id=_account(users, job))
     return VideoJob(
         job_id=job.id, download_url=storage.presign_download(job.storage_key), file_name=job.file_name,
         content_type=job.content_type, size_bytes=job.size_bytes, lot_id=job.lot_id,
@@ -84,7 +98,7 @@ def claim_job(
 
 
 @router.put("/{job_id}/progress", status_code=status.HTTP_204_NO_CONTENT)
-def report_progress(job_id: UUID, progress: JobProgress, store: Store, hub: Hub, clock: Now) -> None:
+def report_progress(job_id: UUID, progress: JobProgress, store: Store, hub: Hub, clock: Now, users: Users) -> None:
     """Renews the lease and streams the frame's detections to the dashboards.
 
     The boxes are not stored, for the same reason live ones are not: they
@@ -100,7 +114,7 @@ def report_progress(job_id: UUID, progress: JobProgress, store: Store, hub: Hub,
     hub.publish("video.progress", VideoProgress(
         upload_id=job.id, frames_processed=job.frames_processed, frames_total=job.frames_total, fps=job.fps,
         video_time_sec=progress.video_time_sec, detections=progress.detections,
-    ), now)
+    ), now, account_id=_account(users, job))
 
 
 @router.post("/{job_id}/complete", response_model=VideoUpload)
@@ -110,8 +124,11 @@ def complete_job(
     store: Store,
     hub: Hub,
     clock: Now,
+    users: Users,
+    settings: Annotated[Settings, Depends(get_app_settings)],
     analyses: VideoAnalysisStore = Depends(get_video_analysis_store),
     events: EventStore = Depends(get_event_store),
+    cameras: CameraStore = Depends(get_camera_store),
 ) -> VideoUpload:
     """Delivers the analysis in the same shape the dashboard already reads.
 
@@ -124,19 +141,20 @@ def complete_job(
     if current.status is not UploadStatus.PROCESSING:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"The job is {current.status}, not processing")
     now = clock()
-    analysis = record_analysis(summary, analyses, events, now)
+    account = _account(users, current)
+    analysis = record_analysis(summary, analyses, events, now, account if settings.account_isolation else None, cameras)
     job = _advance(store, job_id, {
         "status": UploadStatus.COMPLETED, "analysis_id": analysis.id, "finished_at": now,
         "frames_processed": summary.frames_analyzed,
     })
-    hub.publish("video.updated", job.public(), now)
+    hub.publish("video.updated", job.public(), now, account_id=account)
     return job.public()
 
 
 @router.post("/{job_id}/fail", response_model=VideoUpload)
-def fail_job(job_id: UUID, failure: JobFailure, store: Store, hub: Hub, clock: Now) -> VideoUpload:
+def fail_job(job_id: UUID, failure: JobFailure, store: Store, hub: Hub, clock: Now, users: Users) -> VideoUpload:
     """Gives up on a video the worker cannot process, such as an undecodable file."""
     now = clock()
     job = _advance(store, job_id, {"status": UploadStatus.FAILED, "error": failure.error, "finished_at": now})
-    hub.publish("video.updated", job.public(), now)
+    hub.publish("video.updated", job.public(), now, account_id=_account(users, job))
     return job.public()
