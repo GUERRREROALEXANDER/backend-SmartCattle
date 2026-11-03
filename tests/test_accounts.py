@@ -282,3 +282,28 @@ def test_a_worker_cannot_ask_for_a_qr(api, two):
     token = api.post("/api/auth/login", json={"email": "peon@finca.example", "password": "una-clave-larga"}).json()
     worker = {"Authorization": f"Bearer {token['access_token']}"}
     assert api.post("/api/cameras/pairing", headers=worker).status_code == 403
+
+
+def test_the_posture_reaches_only_the_account_that_owns_the_camera(api, two):
+    ana, beto = two
+    camera = save(api, ana)
+    body = {
+        "cattle_inside": 1, "cattle_outside": 0, "observed_at": NOW,
+        "detections": [{"track_id": 3, "label": "cow", "confidence": 0.9, "bbox": [0.1, 0.5, 0.4, 0.6],
+                        "inside_zone": True, "posture": "lying"}],
+    }
+
+    def send():
+        assert api.put(f"/api/ai/cameras/{camera}/occupancy", json=body).status_code == 204
+
+    assert live_messages(api, beto, send) == []
+    with api.websocket_connect("/ws/live") as socket:
+        socket.send_json({"type": "auth", "token": ana["Authorization"].removeprefix("Bearer ")})
+        socket.receive_json()
+        body["observed_at"] = "2026-11-02T12:00:05Z"
+        send()
+        kinds = {}
+        for _ in range(2):
+            message = socket.receive_json()
+            kinds[message["type"]] = message["data"]
+    assert kinds["detections"]["detections"][0]["posture"] == "lying"
