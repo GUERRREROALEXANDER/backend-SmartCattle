@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
@@ -28,6 +28,9 @@ class Detection(BaseModel):
         description="[x1, y1, x2, y2] normalised to the frame, like zones, so the view can scale it",
     )
     inside_zone: bool
+    posture: Literal["standing", "walking", "lying"] | None = Field(
+        default=None, description="What the AI estimates the animal is doing; absent when it cannot tell",
+    )
 
     @field_validator("label", mode="before")
     @classmethod
