@@ -32,6 +32,7 @@ from app.routes import (
     health,
     live,
     metrics,
+    notifications,
     reports,
     users,
     video_jobs,
@@ -51,6 +52,8 @@ from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_agents import FarmServices
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
 from app.services.login_throttle import LoginThrottle
+from app.services.notification_store import InMemoryNotificationStore, SqlNotificationStore
+from app.services.notifier import AlertNotifier, channels_from
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
 from app.services.user_store import InMemoryUserStore, SqlUserStore
 from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
@@ -102,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.video_upload_store = InMemoryVideoUploadStore()
         app.state.catalog_store = InMemoryCatalogStore()
         app.state.audit_log = InMemoryAuditLog()
+        app.state.notification_store = InMemoryNotificationStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -119,8 +123,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.video_upload_store = SqlVideoUploadStore(sessions)
         app.state.catalog_store = SqlCatalogStore(sessions)
         app.state.audit_log = SqlAuditLog(sessions)
+        app.state.notification_store = SqlNotificationStore(sessions)
     app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
     app.state.broadcaster = Broadcaster()
+    app.state.notifier = AlertNotifier(
+        app.state.notification_store, channels_from(settings), lambda: app.state.clock(),
+        cooldown=timedelta(minutes=settings.notification_cooldown_minutes),
+    )
     app.state.live_sockets = Counter()
     # Per process, not per worker: the lockout is best effort, and Render's
     # free plan runs one worker anyway.
@@ -173,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(metrics.router, dependencies=private_reads)
     app.include_router(catalogs.router, dependencies=private_reads)
     app.include_router(reports.router)
+    app.include_router(notifications.router)
     app.include_router(audit.router)
 
     @app.exception_handler(RequestValidationError)

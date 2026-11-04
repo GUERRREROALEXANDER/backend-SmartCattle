@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # Off leaves the herd, the events and the camera list readable without a session.
     require_auth_for_reads: bool = False
     api_docs_enabled: bool = True
+    # WhatsApp Cloud API. Outside a 24-hour conversation Meta only delivers approved templates, so an alert is always
+    # one: the template takes the alert's text, the camera and the time as its three parameters.
+    whatsapp_access_token: SecretStr | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_template_name: str = "smartcattle_alert"
+    whatsapp_template_language: str = "es"
+    whatsapp_api_url: AnyHttpUrl = AnyHttpUrl("https://graph.facebook.com/v23.0")
+    telegram_bot_token: SecretStr | None = None
+    # A herd walking out is one message, not one per animal; the dashboard still shows each alert.
+    notification_cooldown_minutes: int = Field(default=15, ge=0, le=1440)
     # S3-compatible bucket for uploaded videos (Cloudflare R2; moto locally). All four
     # or none: unset means the upload endpoints answer 503, like auth does.
     video_storage_endpoint: AnyHttpUrl | None = None
@@ -96,6 +106,7 @@ class Settings(BaseSettings):
         "smartcattle_ai_url", "ai_api_key", "database_url", "jwt_secret",
         "video_storage_endpoint", "video_storage_bucket", "video_storage_access_key_id",
         "video_storage_secret_access_key", "video_storage_public_endpoint",
+        "whatsapp_access_token", "whatsapp_phone_number_id", "telegram_bot_token",
         mode="before",
     )
     @classmethod
@@ -118,6 +129,13 @@ class Settings(BaseSettings):
                 "Set all of VIDEO_STORAGE_ENDPOINT, VIDEO_STORAGE_BUCKET, VIDEO_STORAGE_ACCESS_KEY_ID "
                 "and VIDEO_STORAGE_SECRET_ACCESS_KEY, or none of them"
             )
+        return self
+
+    @model_validator(mode="after")
+    def whatsapp_is_complete_or_absent(self) -> Self:
+        """A token without its number, or the reverse, would boot fine and lose the first alarm."""
+        if (self.whatsapp_access_token is None) != (self.whatsapp_phone_number_id is None):
+            raise ValueError("Set both WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID, or neither")
         return self
 
     @property

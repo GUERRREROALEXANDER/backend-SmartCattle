@@ -34,6 +34,8 @@ from app.services.event_store import EventStore
 from app.services.farm_agents import FarmServices, account_of, is_farm_key
 from app.services.farm_store import FarmStore
 from app.services.login_throttle import LoginThrottle
+from app.services.notification_store import NotificationStore
+from app.services.notifier import AlertNotifier
 from app.services.occupancy_store import OccupancyStore
 from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
@@ -111,6 +113,16 @@ def get_detection_log_store(request: Request) -> DetectionLogStore:
 def get_video_upload_store(request: Request) -> VideoUploadStore:
     store: VideoUploadStore = request.app.state.video_upload_store
     return store
+
+
+def get_notification_store(request: Request) -> NotificationStore:
+    store: NotificationStore = request.app.state.notification_store
+    return store
+
+
+def get_notifier(request: Request) -> AlertNotifier:
+    notifier: AlertNotifier = request.app.state.notifier
+    return notifier
 
 
 def require_video_storage(request: Request) -> VideoStorage:

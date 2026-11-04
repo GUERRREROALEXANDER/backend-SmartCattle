@@ -35,6 +35,7 @@ class AuditAction(StrEnum):
     ANIMAL_UPDATED = "animal.updated"
     ANIMAL_DEACTIVATED = "animal.deactivated"
     VIDEO_UPLOADED = "video.uploaded"
+    NOTIFICATIONS_UPDATED = "notifications.updated"
 
 
 class AuditRecord(BaseModel):
