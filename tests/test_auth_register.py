@@ -132,7 +132,7 @@ def test_control_characters_in_the_name_are_rejected(auth_client, owner_payload,
 
 
 def test_a_name_pasted_with_a_non_breaking_space_is_accepted(auth_client, owner_payload):
-    response = auth_client.post(REGISTER_URL, json=owner_payload | {"full_name": "Ana Restrepo"})
+    response = auth_client.post(REGISTER_URL, json=owner_payload | {"full_name": "Ana\u00a0Restrepo"})
     assert response.status_code == 201
 
 
