@@ -240,11 +240,18 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/reports/camera-status?camera_id=&start=&end=` | Each change in a camera's reported status (**signed in**) |
 | GET | `/api/reports/alerts?start=&end=&tz=` | Alerts per day by severity and status, average minutes to acknowledge and resolve (**signed in**) |
 | GET | `/api/reports/events?start=&end=&tz=` | Detections per day and camera, by severity (**signed in**) |
+| PUT | `/api/ai/cameras/{camera_id}/detection-log` | AI counts by posture for one camera (`X-API-Key` or the farm PC's key); 204. Keeps the last report of each minute |
+| GET | `/api/reports/detections?camera_id=&start=&end=` | The logged counts per camera and minute (**signed in**) |
+| GET | `/api/reports/daily?day=&tz=` | One day of activity, health notices and alerts for the caller's account; `day` defaults to today in `tz` (**signed in**) |
 | GET | `/api/audit-log?actor_id=&action=&target_type=&target_id=&start=&end=&limit=&offset=` | Who did what, newest first (**owner**) |
 
 ### Reports and history
 
 The report endpoints default to the last 7 days and accept at most 92; `start` is inclusive, `end` exclusive, and a time without a zone is read as UTC. Days are cut in `tz`, an IANA name that defaults to `America/Bogota`, so an alert at 22:00 in Colombia counts on that day and not on the next one in UTC. An empty or wider window, or an unknown zone, is a 422.
+
+`GET /api/reports/daily` takes one calendar day instead of a window; a future day is a 422. Posture figures are head-minutes: one animal seen for one minute counts 1. `complete` stays false until the day ends. A camera needs 120 observed minutes before it can raise a health notice: `prolonged_lying` above a lying share of 0.8, `little_lying` below 0.2. Treat those two values as starting points to calibrate with a vet. A notice suggests a visit and diagnoses nothing.
+
+If the database cannot be reached, any endpoint answers 503 with `{"detail": ..., "request_id": ...}` and a `Retry-After` header, after waiting at most 10 seconds for a connection.
 
 The audit log records sign-ins (failed ones with the address typed), account changes, alert handling, and farm, lot, zone, animal and video-upload changes. It stores which fields changed, never passwords. It is written after the action, so a failure to write it is logged and does not turn a completed action into an error.
 
