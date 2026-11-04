@@ -366,3 +366,35 @@ same body as `POST /api/videos/analyses` and goes through the same
 Its events raise no live security alert, for the reason given in section 11.
 Per-frame boxes travel in `video.progress` messages with `video_time_sec`, so
 the dashboard can draw them over playback, and are not stored.
+
+## 13. Detection logs and the daily report
+
+Decided 2026-11-03 so a farm can read one day of herd activity without opening
+the dashboard's charts.
+
+**YOLO stays in SmartCattle-AI.** Section 2 still holds: this service runs no
+inference. The AI service counts what it sees and sends the counts to
+`PUT /api/ai/cameras/{id}/detection-log`. Posture needs a model that outputs it;
+the backend stores whatever the AI reports and has no opinion on how it got there.
+
+**One row per camera and minute.** `detection_logs` follows `occupancy_samples`
+and section 8's rule against per-frame history: 1 440 rows per camera per day.
+The last report of a minute replaces the earlier ones, because adding them would
+count one animal once per report. An empty scene gets a row too, so the report
+can tell a quiet pasture from a camera that was off.
+
+**Computed on request, with no `daily_reports` table.** `DailyReportBuilder`
+reads the logs, alerts and events of the day and keeps no copy. A saved report
+needs a scheduler this deployment does not have, and it would go stale whenever
+a late report from the farm arrived. The cost is a read of up to 1 440 rows per
+camera per request.
+
+**Health notices are prompts.** They rest on posture counts from a camera, with
+no knowledge of which animal lay down or why. A camera that only runs by day
+reads low, since cattle do most of their lying at night, so the thresholds in
+`app/services/daily_report.py` need calibrating with a vet before anyone relies
+on them.
+
+**The account filter applies here too.** The report goes through `Visible` like
+the other reports, so another account's camera id behaves like one that does not
+exist.
