@@ -53,6 +53,12 @@ services:
       # Cloudflare R2 bucket for uploaded videos (docs/DEPLOYMENT.md). Leave
       # all four empty to switch video uploads off (they answer 503); setting
       # only some of them stops the service from starting.
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
       - key: VIDEO_STORAGE_ENDPOINT
         sync: false
       - key: VIDEO_STORAGE_BUCKET
