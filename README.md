@@ -240,6 +240,10 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/reports/camera-status?camera_id=&start=&end=` | Each change in a camera's reported status (**signed in**) |
 | GET | `/api/reports/alerts?start=&end=&tz=` | Alerts per day by severity and status, average minutes to acknowledge and resolve (**signed in**) |
 | GET | `/api/reports/events?start=&end=&tz=` | Detections per day and camera, by severity (**signed in**) |
+| GET | `/api/notifications/settings` | Where this account wants alerts, and which channels the server has credentials for (**owner**) |
+| PUT | `/api/notifications/settings` | Sets the WhatsApp number, Telegram chat and minimum severity (**owner**) |
+| POST | `/api/notifications/test` | Sends one test message per channel with a recipient; 409 if there is none (**owner**) |
+| GET | `/api/notifications/deliveries?limit=` | Whether each message arrived; holds no recipient (**signed in**) |
 | GET | `/api/audit-log?actor_id=&action=&target_type=&target_id=&start=&end=&limit=&offset=` | Who did what, newest first (**owner**) |
 
 ### Reports and history
@@ -412,6 +416,9 @@ Settings load from `.env` and the environment; environment variables take preced
 | `DATABASE_URL` | Empty | PostgreSQL URL. Empty means in-memory storage. Never exposed by any endpoint. |
 | `CAMERA_OFFLINE_AFTER_SECONDS` | `60` | A camera without a report for longer than this (10–3600) is shown as `offline`. |
 | `JWT_SECRET` | Empty | Signs the access tokens. **Empty means authentication is off:** `/api/auth/*` answers 503 and nothing is protected. Rejected below 32 bytes; changing it signs everyone out. |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | Empty | WhatsApp Cloud API; both or neither. Alerts are sent as an approved template, `WHATSAPP_TEMPLATE_NAME`, with three body parameters: text, camera, time. |
+| `TELEGRAM_BOT_TOKEN` | Empty | Telegram bot from @BotFather, the channel that needs no approval. |
+| `NOTIFICATION_COOLDOWN_MINUTES` | 15 | One message per account, camera and alert type within this time; the dashboard still shows every alert. |
 | `ACCESS_TOKEN_MINUTES` | `60` | Access token lifetime (5–1440). There is no refresh token, so this is the whole session. |
 | `MAX_LOGIN_ATTEMPTS` | `5` | Failed logins per address (3–50) before it is refused. Counted per process; a restart clears it. |
 | `LOGIN_LOCKOUT_SECONDS` | `300` | How long a locked address is refused (30–3600). |
