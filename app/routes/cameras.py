@@ -41,7 +41,7 @@ from app.schemas.occupancy import DetectionFrame, OccupancyReport
 from app.schemas.zone import ZoneList
 from app.services.broadcaster import Broadcaster
 from app.services.camera_pairing import LIFETIME, CameraPairings
-from app.services.camera_store import CameraStore
+from app.services.camera_store import CameraNameTakenError, CameraStore
 from app.services.detection_log_store import DetectionLogStore
 from app.services.occupancy_store import OccupancyStore
 from app.services.zone_store import ZoneStore
@@ -70,6 +70,15 @@ def _saved_view(saved: SavedCamera, store: CameraStore, now: datetime, settings:
     return SavedCameraView(id=saved.id, name=saved.name, source=saved.source, status=status_now)
 
 
+def _save(store: CameraStore, camera: SavedCamera) -> None:
+    try:
+        store.save(camera)
+    except CameraNameTakenError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This account already has a camera with that name",
+        ) from error
+
+
 @router.get("/api/cameras/saved", response_model=SavedCameraList)
 def list_saved_cameras(
     scope: Visible,
@@ -96,7 +105,7 @@ def save_camera(
     if len(store.saved(owner.account_id)) >= MAX_SAVED_CAMERAS:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This account already has too many cameras")
     saved = SavedCamera(id=f"cam-{uuid4().hex[:12]}", name=data.name, source=data.source, account_id=owner.account_id)
-    store.save(saved)
+    _save(store, saved)
     audit.record(
         AuditAction.CAMERA_SAVED, actor_id=owner.id, actor_email=owner.email,
         target_type="camera", target_id=saved.id, detail={"name": saved.name},
@@ -131,7 +140,7 @@ def save_paired_camera(
     if len(store.saved(account_id)) >= MAX_SAVED_CAMERAS:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This account already has too many cameras")
     saved = SavedCamera(id=f"cam-{uuid4().hex[:12]}", name=data.name, source=data.source, account_id=account_id)
-    store.save(saved)
+    _save(store, saved)
     return _saved_view(saved, store, now, settings)
 
 

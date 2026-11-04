@@ -27,15 +27,23 @@ FIRST_OWNER = "(SELECT MIN(id) FROM users WHERE role = 'owner')"
 
 
 def upgrade() -> None:
+    # The database repository creates cameras.account_id, display_name and this
+    # index too, and 0012 applies its SQL first on a fresh PostgreSQL database.
+    inspector = sa.inspect(op.get_bind())
     for table in TABLES:
-        op.add_column(table, sa.Column("account_id", BIGINT_ID, nullable=True))
-        op.create_index(f"ix_{table}_account_id", table, ["account_id"])
-    op.add_column("cameras", sa.Column("display_name", sa.Text(), nullable=True))
+        if "account_id" not in {column["name"] for column in inspector.get_columns(table)}:
+            op.add_column(table, sa.Column("account_id", BIGINT_ID, nullable=True))
+        index = f"ix_{table}_account_id"
+        if index not in {item["name"] for item in inspector.get_indexes(table)}:
+            op.create_index(index, table, ["account_id"])
+    if "display_name" not in {column["name"] for column in inspector.get_columns("cameras")}:
+        op.add_column("cameras", sa.Column("display_name", sa.Text(), nullable=True))
+    # Only what is still empty, so a database that already has owners and names keeps them.
     for table in TABLES:
-        op.execute(f"UPDATE {table} SET account_id = {FIRST_OWNER}")
+        op.execute(f"UPDATE {table} SET account_id = {FIRST_OWNER} WHERE account_id IS NULL")
     op.execute(
         "UPDATE cameras SET display_name = name "
-        "WHERE active AND last_report_at IS NOT NULL AND reported_status IS NOT NULL"
+        "WHERE display_name IS NULL AND active AND last_report_at IS NOT NULL AND reported_status IS NOT NULL"
     )
 
 
