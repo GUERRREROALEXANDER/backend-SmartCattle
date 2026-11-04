@@ -3,6 +3,7 @@
 import pytest
 from alembic import command
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 from app.core.config import Settings
 from app.main import create_app
@@ -58,6 +59,72 @@ def two(api):
     _, ana = sign_up(api, "ana@finca.example")
     _, beto = sign_up(api, "beto@otra.example")
     return ana, beto
+
+
+@pytest.mark.parametrize("repeated", ["Potrero", "POTRERO", "  potrero  "])
+def test_a_repeated_camera_name_in_one_account_is_a_conflict(api, repeated):
+    _, headers = sign_up(api, "ana@finca.example")
+    save(api, headers, name="Potrero")
+    response = api.post("/api/cameras/saved", json={"name": repeated, "source": "192.168.1.21"}, headers=headers)
+    assert response.status_code == 409
+    assert "already has a camera" in response.json()["detail"]
+    assert api.get("/api/cameras/saved", headers=headers).json()["total"] == 1
+
+
+def test_an_accented_name_differing_only_in_capitals_is_the_same_on_both_stores(api):
+    # SQL lower() only folds ASCII on SQLite, so this is the case that would split the stores.
+    _, headers = sign_up(api, "ana@finca.example")
+    save(api, headers, name="Ñandú")
+    response = api.post("/api/cameras/saved", json={"name": "ÑANDÚ", "source": "192.168.1.21"}, headers=headers)
+    assert response.status_code == 409
+
+
+def test_a_different_camera_name_in_the_account_is_accepted(api):
+    _, headers = sign_up(api, "ana@finca.example")
+    save(api, headers, name="Potrero")
+    save(api, headers, name="Potrero 2")
+    assert api.get("/api/cameras/saved", headers=headers).json()["total"] == 2
+
+
+def test_two_accounts_can_use_the_same_camera_name(api, two):
+    ana, beto = two
+    save(api, ana, name="Potrero")
+    save(api, beto, name="Potrero")
+
+
+def test_a_removed_camera_frees_its_name(api):
+    _, headers = sign_up(api, "ana@finca.example")
+    camera = save(api, headers, name="Potrero")
+    assert api.delete(f"/api/cameras/saved/{camera}", headers=headers).status_code == 204
+    save(api, headers, name="Potrero")
+
+
+def test_the_migration_keeps_what_the_database_repository_already_created(tmp_path):
+    # 0012 applies the shared SQL before 0018 on a fresh PostgreSQL database.
+    url = f"sqlite:///{(tmp_path / 'shared-first.db').as_posix()}"
+    config = alembic_config(url)
+    command.upgrade(config, "0017_report_views")
+    engine = create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE cameras ADD COLUMN account_id INTEGER"))
+            connection.execute(text("ALTER TABLE cameras ADD COLUMN display_name TEXT"))
+            connection.execute(text("CREATE INDEX ix_cameras_account_id ON cameras (account_id)"))
+            connection.execute(text(
+                "INSERT INTO users (email, password_hash, full_name, role) VALUES ('a@b.example', 'x', 'A', 'owner')",
+            ))
+            connection.execute(text(
+                "INSERT INTO users (email, password_hash, full_name, role) VALUES ('c@d.example', 'x', 'C', 'owner')",
+            ))
+            connection.execute(text(
+                "INSERT INTO cameras (name, account_id, display_name, active) VALUES ('cam-1', 2, 'Norte', 1)",
+            ))
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            row = connection.execute(text("SELECT account_id, display_name FROM cameras WHERE name = 'cam-1'")).one()
+        assert tuple(row) == (2, "Norte")
+    finally:
+        engine.dispose()
 
 
 def test_each_registration_owns_a_new_empty_space(api):
