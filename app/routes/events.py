@@ -1,15 +1,18 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
+from app.core.config import Settings
 from app.dependencies import (
     Clock,
     Visible,
     get_alert_store,
+    get_app_settings,
     get_broadcaster,
     get_camera_store,
     get_clock,
     get_event_store,
+    get_notifier,
     reporter_account,
 )
 from app.schemas.event import AIEventCreate, Event, EventLevel, EventList, EventType
@@ -17,6 +20,8 @@ from app.services.alert_store import AlertStore
 from app.services.broadcaster import Broadcaster
 from app.services.camera_store import CameraStore
 from app.services.event_store import EventQuery, EventStore
+from app.services.notification_store import NO_SEPARATION_ACCOUNT
+from app.services.notifier import AlertNotifier
 
 router = APIRouter(tags=["events"])
 
@@ -56,11 +61,14 @@ def list_events(
 @router.post("/api/ai/events", response_model=Event, status_code=201)
 def create_event(
     data: AIEventCreate,
+    background: BackgroundTasks,
     reporter: int | None = Depends(reporter_account),
     store: EventStore = Depends(get_event_store),
     alerts: AlertStore = Depends(get_alert_store),
     cameras: CameraStore = Depends(get_camera_store),
     broadcaster: Broadcaster = Depends(get_broadcaster),
+    notifier: AlertNotifier = Depends(get_notifier),
+    settings: Settings = Depends(get_app_settings),
     clock: Clock = Depends(get_clock),
 ) -> Event:
     """Stores a live detection, raises its security alert and pushes both to open dashboards.
@@ -80,4 +88,8 @@ def create_event(
     account = cameras.owner_of(event.camera_id)
     broadcaster.publish("event.created", event, now, account_id=account)
     broadcaster.publish("alert.created", alert, now, account_id=account)
+    # After the answer: the AI service must not wait on WhatsApp, and a channel that is down must not lose the event.
+    recipient = NO_SEPARATION_ACCOUNT if not settings.account_isolation else account
+    if recipient is not None:
+        background.add_task(notifier.deliver, alert, recipient)
     return event
