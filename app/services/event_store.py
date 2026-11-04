@@ -15,6 +15,7 @@ from app.schemas.event import (
     EventLevel,
     EventType,
     level_for_confidence,
+    level_for_event,
 )
 from app.services.camera_store import camera_row
 
@@ -89,7 +90,7 @@ class InMemoryEventStore:
         with self._lock:
             event = Event(
                 **data.model_dump(), id=uuid4(), received_at=received_at,
-                level=level_for_confidence(data.confidence),
+                level=level_for_event(data.event_type, data.confidence),
             )
             self._events.append(event)
             return event
@@ -204,7 +205,7 @@ class SqlEventStore:
     def add(self, data: AIEventCreate, received_at: datetime) -> Event:
         event = Event(
             **data.model_dump(), id=uuid4(), received_at=received_at,
-            level=level_for_confidence(data.confidence),
+            level=level_for_event(data.event_type, data.confidence),
         )
         with self._sessions.begin() as session:
             # events.camera_id references cameras.id, so a camera seen for the first time gets a row.
