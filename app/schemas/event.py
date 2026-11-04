@@ -7,6 +7,12 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 class EventType(StrEnum):
     CATTLE_OUT_OF_ZONE = "cattle_out_of_zone"
+    # Lying without moving for far longer than a cow rests: it may be sick, calving or unable to get up.
+    CATTLE_DOWN = "cattle_down"
+    # A person among the animals during the camera's night hours.
+    POSSIBLE_INTRUSION = "possible_intrusion"
+    # A dog or a predator in view: they scatter or attack a herd.
+    EXTERNAL_ANIMAL_DETECTED = "external_animal_detected"
 
 
 class EventLevel(StrEnum):
@@ -48,6 +54,19 @@ def level_for_confidence(confidence: float) -> EventLevel:
     if confidence < LOW_CONFIDENCE:
         return EventLevel.LOW
     return EventLevel.MEDIUM
+
+
+#: What these mean does not depend on how sharp the picture was: a bear seen at 50 % is still worth waking someone.
+#: A night camera gives low confidences, and ranking these by it would quiet exactly the alarms that matter.
+_LEVEL_BY_TYPE: dict[EventType, EventLevel] = {
+    EventType.CATTLE_DOWN: EventLevel.HIGH,
+    EventType.POSSIBLE_INTRUSION: EventLevel.HIGH,
+    EventType.EXTERNAL_ANIMAL_DETECTED: EventLevel.MEDIUM,
+}
+
+
+def level_for_event(event_type: EventType, confidence: float) -> EventLevel:
+    return _LEVEL_BY_TYPE.get(event_type) or level_for_confidence(confidence)
 
 
 class EventBase(BaseModel):

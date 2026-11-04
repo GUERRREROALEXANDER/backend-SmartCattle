@@ -289,6 +289,40 @@ class DetectionLogRow(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class NotificationSettingsRow(Base):
+    """Where one account wants its alerts outside the dashboard."""
+
+    __tablename__ = "notification_settings"
+
+    # 0 is the one farm of a deployment without account separation.
+    account_id: Mapped[int] = mapped_column(BIGINT_ID, primary_key=True, autoincrement=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=true())
+    whatsapp_phone: Mapped[str | None] = mapped_column(String(16))
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(32))
+    min_severity: Mapped[str] = mapped_column(Text, server_default="medium")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationDeliveryRow(Base):
+    """One message to one channel. Not the shared `alerts` table: that one exists only in the database repository's
+    PostgreSQL schema and points at events by a key this API never exposes, and this must also run without it."""
+
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    account_id: Mapped[int] = mapped_column(BIGINT_ID, index=True)
+    # SET NULL: a purged alert must not erase the record that someone was told.
+    alert_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("security_alerts.id", ondelete="SET NULL"))
+    camera_id: Mapped[str | None] = mapped_column(Text)
+    alert_type: Mapped[str] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    detail: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class CameraStatusChangeRow(Base):
     """A camera's reported status, recorded only when it changes."""
 

@@ -20,11 +20,17 @@ CATALOGS: dict[str, list[tuple[str, str, str, str]]] = {
     "event_types": [
         ("cattle_out_of_zone", "Cattle out of zone", "Ganado fuera de zona",
          "An animal was detected outside its camera's safe zone"),
+        ("cattle_down", "Cattle down", "Animal caído",
+         "An animal has been lying without moving for far longer than a cow rests"),
+        ("possible_intrusion", "Possible intrusion", "Posible intrusión",
+         "A person was seen during the camera's night hours"),
+        ("external_animal_detected", "External animal", "Animal externo",
+         "A dog or a predator was seen near the herd"),
     ],
     "severity_levels": [
-        ("low", "Low", "Baja", "Detector confidence below 0.6"),
-        ("medium", "Medium", "Media", "Detector confidence from 0.6 to 0.9"),
-        ("high", "High", "Alta", "Detector confidence of 0.9 or more"),
+        ("low", "Low", "Baja", "Doubtful detection, confidence below 0.6"),
+        ("medium", "Medium", "Media", "Confidence from 0.6 to 0.9, or a dog or predator in view"),
+        ("high", "High", "Alta", "Confidence of 0.9 or more, an animal down, or a person at night"),
     ],
     "alert_statuses": [
         ("open", "Open", "Abierta", "Raised and not yet seen by anyone"),

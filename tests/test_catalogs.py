@@ -40,7 +40,13 @@ def test_a_catalog_lists_exactly_the_values_of_its_enum(name):
 def test_the_migration_seeds_the_current_catalogs():
     """The migration keeps a frozen copy; a change to either must be made to both."""
     migration = importlib.import_module("migrations.versions.0015_catalogs")
-    assert migration.ROWS == CATALOGS
+    later = importlib.import_module("migrations.versions.0020_anomalies_and_notifications")
+    seeded = dict(migration.ROWS)
+    seeded["event_types"] = [*seeded["event_types"], *(row[:4] for row in later.EVENT_TYPES)]
+    seeded["severity_levels"] = [
+        (code, label, label_es, later.SEVERITIES[code][1]) for code, label, label_es, _ in seeded["severity_levels"]
+    ]
+    assert seeded == CATALOGS
 
 
 def test_the_catalogs_are_public(client):

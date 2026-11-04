@@ -19,6 +19,9 @@ from app.services.camera_store import camera_row
 #: (KeyError in the tests) instead of producing a vague message.
 MESSAGES: dict[EventType, str] = {
     EventType.CATTLE_OUT_OF_ZONE: "Cattle left the safe zone on {camera}",
+    EventType.CATTLE_DOWN: "An animal has been down without moving for a long time on {camera}",
+    EventType.POSSIBLE_INTRUSION: "A person was seen at night on {camera}",
+    EventType.EXTERNAL_ANIMAL_DETECTED: "A dog or a predator was seen on {camera}",
 }
 
 
