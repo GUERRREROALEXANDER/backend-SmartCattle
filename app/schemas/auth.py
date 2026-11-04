@@ -1,3 +1,4 @@
+import unicodedata
 from datetime import datetime
 from enum import StrEnum
 
@@ -40,8 +41,12 @@ def check_new_password(value: str) -> str:
 
 
 def check_printable(value: str) -> str:
-    """Refuses control characters; PostgreSQL cannot store NUL, so it would otherwise fail as a 500."""
-    if not value.isprintable():
+    """Refuses control characters; PostgreSQL cannot store NUL, so it would otherwise fail as a 500.
+
+    By category rather than str.isprintable, which also refuses the non-breaking
+    space a name picks up when someone pastes it from a web page or a document.
+    """
+    if any(unicodedata.category(character) == "Cc" for character in value):
         raise ValueError("must not contain control characters")
     return value
 
