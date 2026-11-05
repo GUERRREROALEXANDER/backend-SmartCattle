@@ -39,6 +39,8 @@ from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
 from app.services.video_storage import VideoStorage
 from app.services.video_upload_store import VideoUploadStore
+from app.services.whatsapp_store import WhatsappStore
+from app.services.whatsapp_verification import PhoneVerifications
 from app.services.zone_store import ZoneStore
 
 #: Returns the current time, always timezone-aware and in UTC. Injected so
@@ -175,6 +177,16 @@ def get_login_throttle(request: Request) -> LoginThrottle:
     return throttle
 
 
+def get_whatsapp_store(request: Request) -> WhatsappStore:
+    store: WhatsappStore = request.app.state.whatsapp_store
+    return store
+
+
+def get_phone_verifications(request: Request) -> PhoneVerifications:
+    verifications: PhoneVerifications = request.app.state.phone_verifications
+    return verifications
+
+
 def verify_api_key(
     settings: Settings = Depends(get_app_settings),
     api_key: str | None = Security(api_key_header),
@@ -189,6 +201,15 @@ def verify_api_key(
     expected = settings.ai_api_key.get_secret_value()
     if api_key is None or not secrets.compare_digest(api_key.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def verify_configured_api_key(
+    settings: Settings = Depends(get_app_settings),
+    _verified: None = Depends(verify_api_key),
+) -> None:
+    """For endpoints that hand out people's data: unlike ingestion, these stay shut when no key is set."""
+    if settings.ai_api_key is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI_API_KEY is not configured")
 
 
 def reporter_account(

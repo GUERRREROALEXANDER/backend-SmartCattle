@@ -38,6 +38,7 @@ from app.routes import (
     video_jobs,
     video_uploads,
     videos,
+    whatsapp,
     zones,
 )
 from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
@@ -57,6 +58,8 @@ from app.services.user_store import InMemoryUserStore, SqlUserStore
 from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
 from app.services.video_storage import S3VideoStorage
 from app.services.video_upload_store import InMemoryVideoUploadStore, SqlVideoUploadStore
+from app.services.whatsapp_store import InMemoryWhatsappStore, SqlWhatsappStore
+from app.services.whatsapp_verification import PhoneVerifications
 from app.services.zone_store import InMemoryZoneStore, SqlZoneStore
 
 logger = logging.getLogger(__name__)
@@ -103,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.video_upload_store = InMemoryVideoUploadStore()
         app.state.catalog_store = InMemoryCatalogStore()
         app.state.audit_log = InMemoryAuditLog()
+        app.state.whatsapp_store = InMemoryWhatsappStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -120,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.video_upload_store = SqlVideoUploadStore(sessions)
         app.state.catalog_store = SqlCatalogStore(sessions)
         app.state.audit_log = SqlAuditLog(sessions)
+        app.state.whatsapp_store = SqlWhatsappStore(sessions)
     app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
     app.state.broadcaster = Broadcaster()
     app.state.live_sockets = Counter()
@@ -129,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Apart from the QR's codes: a phone's QR can be photographed, and it must not be able to link a PC.
     app.state.farm_pairings = CameraPairings()
     app.state.farm_services = FarmServices()
+    app.state.phone_verifications = PhoneVerifications()
     app.state.login_throttle = LoginThrottle(
         max_attempts=settings.max_login_attempts,
         lockout=timedelta(seconds=settings.login_lockout_seconds),
@@ -171,6 +177,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(farms.router)
     app.include_router(video_uploads.router)
     app.include_router(video_jobs.router)
+    app.include_router(whatsapp.router)
+    app.include_router(whatsapp.service_router)
     app.include_router(videos.router, dependencies=private_reads)
     app.include_router(metrics.router, dependencies=private_reads)
     app.include_router(catalogs.router, dependencies=private_reads)
