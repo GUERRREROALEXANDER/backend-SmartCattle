@@ -439,3 +439,44 @@ MediaMTX fetches the public key once at startup, so it must be restarted after
 
 **Camera passwords stay on the PC.** They live in the PC's copy of
 `deploy/mediamtx.yml` and nowhere else, which keeps the rule in section 8.
+
+## 15. WhatsApp notices
+
+Decided 2026-11-04 so an owner away from the dashboard hears that cattle left
+the zone.
+
+**No language model.** YOLO and the zone rule already decide what happened. A
+fixed text costs nothing, cannot invent a detail, and reads the same every time.
+It is in Spanish, unlike the rest of this codebase, because it is product content
+for the people receiving it, like the Spanish labels in the catalogs.
+
+**A queue the sender claims from.** The sender is a Node service using Baileys,
+which needs a long-lived session and runs on a PC the backend cannot reach. It
+polls `POST /api/ai/whatsapp/claim`, so it needs no tunnel, and messages wait
+while it is off. The table is the queue, as in section 12, and this keeps a
+WhatsApp outage out of the ingestion request.
+
+**At least once, and bounded.** A claim is a 60-second lease, offered three times
+at most. A service that dies between sending and reporting can repeat a message,
+which beats losing an alert. Alert notices expire after an hour and verification
+codes after ten minutes: after a night offline, a stale burst would say nothing
+anyone can act on. Bodies are emptied once settled, because one may hold a code.
+
+**Only verified numbers.** A typo would otherwise send a farm's alerts to a
+stranger indefinitely. Codes live in memory, like the QR codes, and are limited
+per person and per number, since each request messages whoever holds that number.
+
+**One message per camera every ten minutes.** One animal outside produces many
+detections, and repetition gets the number reported as spam. Every detection
+still raises its alert on the dashboard. Low-severity detections send nothing.
+Only cameras with an owner notify anyone: a camera nobody saved belongs to no
+account, so nobody can be told.
+
+**The message says when it was detected.** The AI service can deliver a detection
+late after an outage, so the time shown is the detection's, not the arrival's. A
+time more than an hour from the backend's clock is taken as a farm PC with a wrong
+clock, and the arrival time is shown instead.
+
+**Baileys is unofficial.** It speaks WhatsApp Web's protocol, and Meta can block
+the number. Only the service in front of this queue depends on it, so moving to
+the WhatsApp Business API would change that service and nothing here.
