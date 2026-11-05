@@ -31,6 +31,7 @@ from app.routes import (
     farms,
     health,
     live,
+    media,
     metrics,
     reports,
     users,
@@ -162,6 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(animals.router, dependencies=private_reads)
     app.include_router(events.router, dependencies=private_reads)
     app.include_router(cameras.router, dependencies=private_reads)
+    app.include_router(media.router)
     app.include_router(farm.router)
     app.include_router(alerts.router)
     app.include_router(live.router)
