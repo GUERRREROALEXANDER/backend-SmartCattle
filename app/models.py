@@ -289,6 +289,35 @@ class DetectionLogRow(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class WhatsappContactRow(Base):
+    """A WhatsApp number its owner verified, and whether they want notices on it."""
+
+    __tablename__ = "whatsapp_contacts"
+
+    user_id: Mapped[int] = mapped_column(BIGINT_ID, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    phone: Mapped[str] = mapped_column(String(16))
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WhatsappMessageRow(Base):
+    """A message for the WhatsApp service to send. The body is emptied once the message is settled."""
+
+    __tablename__ = "whatsapp_messages"
+
+    id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
+    phone: Mapped[str] = mapped_column(String(16))
+    body: Mapped[str] = mapped_column(Text)
+    camera_id: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(String(200))
+
+
 class CameraStatusChangeRow(Base):
     """A camera's reported status, recorded only when it changes."""
 
