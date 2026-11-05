@@ -116,6 +116,20 @@ Upgrading MediaMTX can turn on new listeners. v1.21 added MoQ on every interface
 which is why the template names each protocol it switches off. After an upgrade,
 check its startup log lists only `[HLS]`.
 
+## 5. WhatsApp notices
+
+The sender runs apart from this repository, on any machine that stays on. It only
+makes outgoing connections, so it needs no tunnel. Messages wait while it is off:
+up to an hour for an alert and ten minutes for a verification code.
+
+1. Link a number with `node vincular.mjs`, scanning the QR from WhatsApp.
+2. Create its `.env` from `.env.example`, with this backend's URL and `AI_API_KEY`.
+3. Start it with `npm start`, and keep it running.
+
+Each person then proves their number through `/api/auth/me/whatsapp/verification`
+and `/verify`. Only detections from cameras saved in an account notify anyone.
+Use a dedicated number: Baileys is unofficial and Meta can block it.
+
 ## Restrictions on the internet
 
 render.yaml turns these on. Per-address limits (`app/guard.py`) answer 429 with Retry-After; `/health` and the AI service with its key are exempt.
