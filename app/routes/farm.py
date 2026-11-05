@@ -55,7 +55,8 @@ def report_farm_pc(
     """Where this PC can be reached now. Its address changes when its tunnel restarts."""
     if account_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This needs the key of a linked PC")
-    services.report(account_id, str(data.url).rstrip("/"), clock())
+    media_url = None if data.media_url is None else str(data.media_url).rstrip("/")
+    services.report(account_id, str(data.url).rstrip("/"), clock(), media_url)
 
 
 @router.get("/api/ai/farm-pc/access", status_code=status.HTTP_204_NO_CONTENT)
