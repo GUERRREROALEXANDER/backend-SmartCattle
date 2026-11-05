@@ -111,6 +111,24 @@ def test_the_alert_shows_the_farm_local_time(api, ana, camera_id, clock):
     assert "03:42 PM" in claim(api)[0]["body"]
 
 
+@pytest.mark.parametrize(("delay", "shown"), [
+    (timedelta(hours=1), "02:00 PM"),
+    (timedelta(hours=1, seconds=1), "03:00 PM"),
+    (timedelta(hours=-1), "02:00 PM"),
+    (timedelta(hours=-1, seconds=-1), "12:59 PM"),
+])
+def test_the_alert_shows_when_it_was_detected_unless_that_clock_looks_wrong(api, ana, camera_id, clock, delay, shown):
+    """Detected at 19:00 UTC (02:00 PM on the farm); what is shown depends on how far that is from the arrival."""
+    link_phone(api, ana, clock)
+    clock.now = datetime(2026, 11, 4, 19, 0, tzinfo=UTC) + delay
+    body = {
+        "event_type": "cattle_out_of_zone", "camera_id": camera_id, "detected_object": "cow",
+        "confidence": 0.95, "timestamp": "2026-11-04T19:00:00Z",
+    }
+    assert api.post("/api/ai/events", json=body, headers=SERVICE).status_code == 201
+    assert shown in claim(api)[0]["body"]
+
+
 def test_a_number_that_was_not_verified_receives_no_alert(api, ana, camera_id):
     assert api.post("/api/auth/me/whatsapp/verification", json={"phone": PHONE}, headers=ana).status_code == 202
     settle_all(api)
