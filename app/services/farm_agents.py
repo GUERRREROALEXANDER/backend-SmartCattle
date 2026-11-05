@@ -43,12 +43,12 @@ class FarmServices:
     """Where each account's PC said it can be reached."""
 
     def __init__(self) -> None:
-        self._seen: dict[int, tuple[str, datetime]] = {}
+        self._seen: dict[int, tuple[str, str | None, datetime]] = {}
         self._lock = Lock()
 
-    def report(self, account_id: int, url: str, now: datetime) -> None:
+    def report(self, account_id: int, url: str, now: datetime, media_url: str | None = None) -> None:
         with self._lock:
-            self._seen[account_id] = (url, now)
+            self._seen[account_id] = (url, media_url, now)
 
     def url_for(self, account_id: int | None, now: datetime) -> str | None:
         """Its address, unless it has gone quiet: a dead address would only make the panel wait."""
@@ -56,4 +56,12 @@ class FarmServices:
             return None
         with self._lock:
             found = self._seen.get(account_id)
-        return found[0] if found is not None and now - found[1] <= OFFLINE_AFTER else None
+        return found[0] if found is not None and now - found[2] <= OFFLINE_AFTER else None
+
+    def media_url_for(self, account_id: int | None, now: datetime) -> str | None:
+        """Its media server's address, under the same rule as url_for."""
+        if account_id is None:
+            return None
+        with self._lock:
+            found = self._seen.get(account_id)
+        return found[1] if found is not None and now - found[2] <= OFFLINE_AFTER else None
