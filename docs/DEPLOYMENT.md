@@ -84,6 +84,38 @@ user, has a `HEALTHCHECK` on `/health`, and applies migrations on start
 when `DATABASE_URL` is set. Pass the same environment variables as in
 `.env.example`, and keep one instance for the reason above.
 
+## 4. Live video from anywhere
+
+Everything here runs on the farm PC, which is the machine that can reach the
+cameras. The router needs no open ports. `JWT_SECRET` must be set on the backend.
+
+1. Install [MediaMTX](https://github.com/bluenviron/mediamtx/releases) (tested with v1.21.3).
+2. Copy `deploy/mediamtx.yml` next to it, then fill in the backend's address, the
+   dashboard's address and one `paths` entry per camera. Each entry is named after
+   the camera's id in `GET /api/cameras/saved`, and its `source` holds the camera's
+   real address with its password. Keep this copy out of the repository.
+3. Start it: `mediamtx mediamtx.yml`.
+4. Open a tunnel to it, separate from the AI service's:
+   `cloudflared tunnel --url http://127.0.0.1:8888`.
+5. Include the tunnel's address as `media_url` in the PC's report:
+
+   ```sh
+   curl -X PUT https://YOUR-BACKEND.onrender.com/api/ai/farm-pc \
+     -H 'Content-Type: application/json' -H 'X-API-Key: FARM-PC-KEY' \
+     -d '{"url":"https://AI-TUNNEL.trycloudflare.com","media_url":"https://VIDEO-TUNNEL.trycloudflare.com"}'
+   ```
+
+   A report without `media_url` stops offering video, and so do 90 seconds without
+   a report, so it belongs in the same report the AI service already repeats. A
+   quick tunnel's address changes when it restarts; the next report corrects it.
+
+Restart MediaMTX after replacing `JWT_SECRET`: it fetches the public key once, and
+refuses every ticket until it has the new one.
+
+Upgrading MediaMTX can turn on new listeners. v1.21 added MoQ on every interface,
+which is why the template names each protocol it switches off. After an upgrade,
+check its startup log lists only `[HLS]`.
+
 ## Restrictions on the internet
 
 render.yaml turns these on. Per-address limits (`app/guard.py`) answer 429 with Retry-After; `/health` and the AI service with its key are exempt.
