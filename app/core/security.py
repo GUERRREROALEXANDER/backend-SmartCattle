@@ -5,12 +5,17 @@ mistake is not a bug but a vulnerability, and it should be readable on its
 own.
 """
 
+import base64
+import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 import bcrypt
 import jwt
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from jwt import InvalidTokenError
 
 #: bcrypt truncates at 72 bytes and silently ignores the rest, so a longer
@@ -28,6 +33,12 @@ ALGORITHM = "HS256"
 #: Tolerance for a token that looks issued in the future. The services run
 #: on different machines, so a second of drift must not reject a fresh token.
 CLOCK_SKEW_SECONDS = 60
+
+#: Asymmetric because the verifier is a media server on a farm's PC. Handing it
+#: JWT_SECRET would let any farm sign in as anyone.
+MEDIA_ALGORITHM = "EdDSA"
+MEDIA_ISSUER = "smartcattle-backend"
+MEDIA_AUDIENCE = "smartcattle-media"
 
 
 class PasswordTooLongError(ValueError):
@@ -136,3 +147,41 @@ def decode_access_token(token: str, *, secret: str, now: datetime) -> dict[str, 
     if issued_at - moment > CLOCK_SKEW_SECONDS:
         return None
     return claims
+
+
+def _media_key(secret: str) -> Ed25519PrivateKey:
+    # Derived rather than configured, like the farm keys: no extra secret to keep,
+    # and replacing JWT_SECRET retires this key along with every session.
+    seed = hmac.new(secret.encode("utf-8"), b"smartcattle-media-ticket", hashlib.sha256).digest()
+    return Ed25519PrivateKey.from_private_bytes(seed)
+
+
+def _media_public_bytes(secret: str) -> bytes:
+    return _media_key(secret).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+
+def _media_key_id(secret: str) -> str:
+    return hashlib.sha256(_media_public_bytes(secret)).hexdigest()[:16]
+
+
+def media_jwks(secret: str) -> dict[str, list[dict[str, str]]]:
+    """The public half of the ticket key, in the format media servers fetch."""
+    public = base64.urlsafe_b64encode(_media_public_bytes(secret)).rstrip(b"=").decode("ascii")
+    return {"keys": [{
+        "kty": "OKP", "crv": "Ed25519", "x": public, "use": "sig",
+        "alg": MEDIA_ALGORITHM, "kid": _media_key_id(secret),
+    }]}
+
+
+def create_media_ticket(*, camera_id: str, secret: str, expires_in: timedelta, now: datetime) -> str:
+    """Signs a ticket that can read one camera's video and do nothing else."""
+    issued_at = now.astimezone(UTC)
+    payload: dict[str, Any] = {
+        "iss": MEDIA_ISSUER,
+        "aud": MEDIA_AUDIENCE,
+        "iat": int(issued_at.timestamp()),
+        "exp": int((issued_at + expires_in).timestamp()),
+        "jti": str(uuid4()),
+        "mediamtx_permissions": [{"action": "read", "path": camera_id}],
+    }
+    return jwt.encode(payload, _media_key(secret), algorithm=MEDIA_ALGORITHM, headers={"kid": _media_key_id(secret)})
