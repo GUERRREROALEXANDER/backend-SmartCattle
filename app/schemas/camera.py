@@ -133,6 +133,13 @@ class SavedCameraList(BaseModel):
     total: int
 
 
+class CameraLiveAccess(BaseModel):
+    camera_id: str
+    hls_url: str = Field(description="HLS playlist on the farm's media server")
+    token: str = Field(description="Send as Authorization: Bearer on the player's requests")
+    expires_in: int = Field(description="Seconds the token can open the video; video already open keeps playing")
+
+
 class CameraRegistration(BaseModel):
     source: str
     active: bool
