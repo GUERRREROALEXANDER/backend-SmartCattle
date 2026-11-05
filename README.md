@@ -69,6 +69,7 @@ app/
 database/schema.sql        Copy of the shared database schema
 migrations/                Alembic environment and revisions
 alembic.ini
+deploy/mediamtx.yml        Template for the media server on the farm PC
 render.yaml                Render Blueprint (backend + frontend static site; PostgreSQL on Neon)
 data_structures/
 docs/ARCHITECTURE.md
@@ -218,6 +219,9 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/events` | Event feed, newest received first. Filters: `camera_id`, `level`, `event_type`; paging: `limit` (1–200, default 50) and `offset` |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
+| POST | `/api/cameras/{camera_id}/live` | HLS address and a 10-minute ticket for one saved camera (signed in); 404 if it is not this account's, 409 while the farm PC shares no video. See [Live video](#live-video) |
+| GET | `/api/media/jwks.json` | Public key the farm's MediaMTX verifies tickets with (public); 503 without `JWT_SECRET` |
+| PUT | `/api/ai/farm-pc` | Where the linked PC's service, and optionally its media server (`media_url`), can be reached (farm PC's key); 204 |
 | PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
 | POST | `/api/videos/analyses` | Stores a simulated video analysis (**signed in**); returns 201 with the analysis and alerts |
 | GET | `/api/videos/analyses?limit=20` | Latest analyses first; `limit` defaults to 20 and accepts 1–100 |
@@ -378,6 +382,19 @@ Optional `stream_url` is the public `http(s)` base URL of the AI service video (
 `GET /api/cameras` returns `status` (effective) and `reported_status`. If the last report is older than `CAMERA_OFFLINE_AFTER_SECONDS`, the effective status is `offline`: the backend cannot claim a camera is online unless the AI service keeps confirming it. Cameras appear only after their first report; an empty list means no camera is connected.
 
 Invalid event bodies return 422. If a shared key is configured, a missing or incorrect key returns 401 with `Invalid or missing API key`. Unhandled errors return 500 with `Internal server error` without a trace in the response.
+
+### Live video
+
+Video goes from MediaMTX on the farm PC to the browser and never through this API. Setting up the PC is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#4-live-video-from-anywhere); the reasons are in [ARCHITECTURE.md](docs/ARCHITECTURE.md#14-live-video-from-anywhere).
+
+```js
+const live = await api.post(`/cameras/${cameraId}/live`);
+const hls = new Hls({ xhrSetup: (xhr) => xhr.setRequestHeader("Authorization", `Bearer ${live.token}`) });
+hls.loadSource(live.hls_url);
+hls.attachMedia(video);
+```
+
+The ticket opens that one camera and nothing else, for `expires_in` seconds. It is sent as a header because a token in a URL ends up in access logs. Video already open keeps playing after the ticket expires; ask for a new one each time the player opens. Expect a few seconds of delay: HLS is the protocol a tunnel can carry.
 
 ## Frontend integration
 
