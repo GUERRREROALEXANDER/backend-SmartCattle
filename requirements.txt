@@ -11,6 +11,8 @@ psycopg[binary]>=3.2,<4.0
 bcrypt>=4.2,<6.0
 # Access tokens.
 pyjwt>=2.10,<3.0
+# Ed25519 signatures for live video tickets: a media server at a farm verifies them with a public key.
+cryptography>=44.0
 # Required by pydantic's EmailStr; pydantic does not pull it in itself.
 email-validator>=2.2,<3.0
 # Presigned upload and download URLs for video files in S3-compatible storage
