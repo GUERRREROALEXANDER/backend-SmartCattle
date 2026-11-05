@@ -1,13 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.core.config import Settings
+from app.core.security import create_media_ticket
 from app.dependencies import (
     AuditTrail,
     Clock,
+    CurrentUser,
     OwnerUser,
     Visible,
     get_app_settings,
@@ -16,14 +18,17 @@ from app.dependencies import (
     get_camera_store,
     get_clock,
     get_detection_log_store,
+    get_farm_services,
     get_occupancy_store,
     get_zone_store,
+    require_jwt_secret,
     verify_camera_reporter,
 )
 from app.schemas.audit import AuditAction
 from app.schemas.camera import (
     Camera,
     CameraList,
+    CameraLiveAccess,
     CameraPairing,
     CameraRecord,
     CameraSourceReport,
@@ -43,6 +48,7 @@ from app.services.broadcaster import Broadcaster
 from app.services.camera_pairing import LIFETIME, CameraPairings
 from app.services.camera_store import CameraNameTakenError, CameraStore
 from app.services.detection_log_store import DetectionLogStore
+from app.services.farm_agents import FarmServices
 from app.services.occupancy_store import OccupancyStore
 from app.services.zone_store import ZoneStore
 
@@ -52,6 +58,9 @@ CameraId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-
 
 #: A farm has a few cameras. A loop saving them has no reason to reach the database thousands of times.
 MAX_SAVED_CAMERAS = 50
+
+#: How long a ticket can open the video. A session it opened outlives it (ARCHITECTURE section 14).
+MEDIA_TICKET_LIFETIME = timedelta(minutes=10)
 
 
 def _camera(record: CameraRecord, now: datetime, settings: Settings, name: str | None = None) -> Camera:
@@ -177,6 +186,37 @@ def delete_saved_camera(
     audit.record(
         AuditAction.CAMERA_DELETED, actor_id=owner.id, actor_email=owner.email,
         target_type="camera", target_id=camera_id, detail={"name": saved.name},
+    )
+
+
+@router.post("/api/cameras/{camera_id}/live", response_model=CameraLiveAccess)
+def open_live_video(
+    camera_id: CameraId,
+    _user: CurrentUser,
+    scope: Visible,
+    secret: str = Depends(require_jwt_secret),
+    store: CameraStore = Depends(get_camera_store),
+    services: FarmServices = Depends(get_farm_services),
+    clock: Clock = Depends(get_clock),
+) -> CameraLiveAccess:
+    """Where to watch a camera from anywhere, with a ticket for that camera only.
+
+    The video goes from the farm's media server to the browser and never passes
+    through here (ARCHITECTURE section 14). CurrentUser as well as Visible: without
+    account isolation Visible lets anyone through, and video is never open to anyone.
+    """
+    saved = store.saved_one(camera_id)
+    if saved is None or not scope.sees_account(saved.account_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No saved camera with id {camera_id}")
+    now = clock()
+    media_url = services.media_url_for(saved.account_id, now)
+    if media_url is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The farm PC is not sharing video right now")
+    return CameraLiveAccess(
+        camera_id=camera_id,
+        hls_url=f"{media_url}/{camera_id}/index.m3u8",
+        token=create_media_ticket(camera_id=camera_id, secret=secret, expires_in=MEDIA_TICKET_LIFETIME, now=now),
+        expires_in=int(MEDIA_TICKET_LIFETIME.total_seconds()),
     )
 
 
