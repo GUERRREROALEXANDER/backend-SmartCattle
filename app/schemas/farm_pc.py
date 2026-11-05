@@ -1,4 +1,4 @@
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
 
 class FarmPcPairing(BaseModel):
@@ -16,6 +16,19 @@ class FarmPcPresence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: AnyHttpUrl = Field(description="Where browsers reach this PC's service right now")
+    media_url: AnyHttpUrl | None = Field(
+        default=None, description="Where browsers reach this PC's MediaMTX HLS server; omit when it is not running",
+    )
+
+    @field_validator("media_url")
+    @classmethod
+    def safe_media_url(cls, value: AnyHttpUrl | None) -> AnyHttpUrl | None:
+        # This address is handed to every browser that opens the video.
+        if value is not None and (value.username or value.password):
+            raise ValueError("media_url must not contain credentials")
+        if value is not None and len(str(value)) > 300:
+            raise ValueError("media_url must be at most 300 characters")
+        return value
 
 
 class FarmPcState(BaseModel):
