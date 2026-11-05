@@ -87,5 +87,7 @@ def create_event(
     account = cameras.owner_of(event.camera_id)
     broadcaster.publish("event.created", event, now, account_id=account)
     broadcaster.publish("alert.created", alert, now, account_id=account)
-    queue_alert_notice(alert, whatsapp=whatsapp, users=users, cameras=cameras, now=now)
+    queue_alert_notice(
+        alert, detected_at=event.timestamp, whatsapp=whatsapp, users=users, cameras=cameras, now=now,
+    )
     return event

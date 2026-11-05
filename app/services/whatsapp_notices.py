@@ -37,8 +37,15 @@ def _alert_text(camera_name: str, at: datetime) -> str:
     )
 
 
+def _moment_to_show(detected_at: datetime, now: datetime) -> datetime:
+    """When it happened. A detection can arrive late after an outage, but a farm PC's clock can also just be wrong,
+    and a time far from now says more about that clock than about the animal."""
+    return detected_at if abs(now - detected_at) <= NOTICE_LIFETIME else now
+
+
 def queue_alert_notice(
-    alert: Alert, *, whatsapp: WhatsappStore, users: UserStore, cameras: CameraStore, now: datetime,
+    alert: Alert, *, detected_at: datetime, whatsapp: WhatsappStore, users: UserStore, cameras: CameraStore,
+    now: datetime,
 ) -> None:
     """Queues the notice for an alert. The alert already exists, so a failure here must not undo or repeat it."""
     try:
@@ -56,7 +63,7 @@ def queue_alert_notice(
         saved = cameras.saved_one(alert.camera_id)
         whatsapp.queue_camera_notice(
             alert.camera_id, sorted({contact.phone for contact in active}),
-            _alert_text(alert.camera_id if saved is None else saved.name, now),
+            _alert_text(alert.camera_id if saved is None else saved.name, _moment_to_show(detected_at, now)),
             now, now + NOTICE_LIFETIME, QUIET_PERIOD,
         )
     except Exception:
