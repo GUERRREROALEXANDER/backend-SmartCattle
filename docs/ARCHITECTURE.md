@@ -180,9 +180,9 @@ responses or logs. Camera error messages are capped at 300 characters and
 rejected if they contain `://`, so a stream URL with embedded credentials
 cannot be stored and later shown in the frontend.
 
-**Video.** The backend does not proxy or store video. Live video, when the
-camera stream is confirmed, goes from a local media server on the farm PC to
-the browser (see the AI repository README); the backend only stores state.
+**Video.** The backend does not proxy or store video. Live video goes from a
+media server on the farm PC to the browser (section 14); the backend only says
+where it is and who may watch.
 
 ## 9. Simulated video analyses and summary metrics
 
@@ -398,3 +398,44 @@ on them.
 **The account filter applies here too.** The report goes through `Visible` like
 the other reports, so another account's camera id behaves like one that does not
 exist.
+
+## 14. Live video from anywhere
+
+Decided 2026-11-04 so a person can watch a camera away from the farm without
+opening ports on its router.
+
+**MediaMTX on the farm PC, reached through a tunnel.** The camera is only
+reachable on the farm's network (section 8), and Render offers neither UDP nor a
+second port, so a media server there could not receive the camera anyway. The PC
+already runs a Cloudflare tunnel for the AI service and reports its address with
+`PUT /api/ai/farm-pc`, so the media server's address travels in the same report
+and is held in memory the same way. No table was added.
+
+**HLS only.** A tunnel carries HTTP. WebRTC's media needs UDP or a TURN relay,
+which this deployment does not have. The cost is a few seconds of delay.
+
+**Tickets, verified at the farm.** MediaMTX can ask the backend about each
+request or verify a signed token by itself. HLS is many requests per viewer, so
+asking would put an internet round trip in front of every segment, count against
+the rate limit of that one address, and stop the video whenever Render's free
+instance is asleep. `POST /api/cameras/{id}/live` signs a ticket instead, and
+MediaMTX checks it against `GET /api/media/jwks.json`.
+
+**Ed25519, not the session key.** HS256 would mean giving `JWT_SECRET` to every
+farm PC, and with it the power to sign in as anyone. The private key is derived
+from `JWT_SECRET`, like the farm keys, so there is nothing new to configure. A
+ticket and a session cannot stand in for each other: `decode_access_token` pins
+HS256 and MediaMTX only trusts the published key.
+
+**A ticket opens the video; it does not keep it open.** A ticket grants `read` on
+one path for ten minutes, and MediaMTX checks it when a session starts. The session
+then runs on an id in its URLs, past the ticket's expiry (measured on v1.21.3). So
+the ten minutes limit how long a ticket can start a session, not how long someone
+watches. A deactivated account's open player keeps playing until it stops, and only
+restarting MediaMTX cuts it. Those URLs act as a secret while the session lasts.
+
+MediaMTX fetches the public key once at startup, so it must be restarted after
+`JWT_SECRET` is replaced; until then every ticket is refused.
+
+**Camera passwords stay on the PC.** They live in the PC's copy of
+`deploy/mediamtx.yml` and nowhere else, which keeps the rule in section 8.
