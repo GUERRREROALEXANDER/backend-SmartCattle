@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     video_storage_public_endpoint: AnyHttpUrl | None = None
     # How long a browser has to finish a 1 GB upload over a farm connection.
     video_upload_url_minutes: int = Field(default=120, ge=5, le=720)
+    # Imou developer account (open.imoulife.com). Its cameras open through Imou's cloud by serial number, so they
+    # work from a server on the internet, where a LAN address (192.168.x.x) never can. Both or neither.
+    imou_app_id: str | None = None
+    imou_app_secret: SecretStr | None = None
+    # The data center of that account; the default is the international one.
+    imou_api_url: AnyHttpUrl = AnyHttpUrl("https://openapi.easy4ip.com/openapi")
 
     @field_validator("allowed_origins")
     @classmethod
@@ -95,7 +101,7 @@ class Settings(BaseSettings):
     @field_validator(
         "smartcattle_ai_url", "ai_api_key", "database_url", "jwt_secret",
         "video_storage_endpoint", "video_storage_bucket", "video_storage_access_key_id",
-        "video_storage_secret_access_key", "video_storage_public_endpoint",
+        "video_storage_secret_access_key", "video_storage_public_endpoint", "imou_app_id", "imou_app_secret",
         mode="before",
     )
     @classmethod
@@ -119,6 +125,16 @@ class Settings(BaseSettings):
                 "and VIDEO_STORAGE_SECRET_ACCESS_KEY, or none of them"
             )
         return self
+
+    @model_validator(mode="after")
+    def imou_is_complete_or_absent(self) -> Self:
+        if (self.imou_app_id is None) != (self.imou_app_secret is None):
+            raise ValueError("Set both IMOU_APP_ID and IMOU_APP_SECRET, or neither")
+        return self
+
+    @property
+    def imou_enabled(self) -> bool:
+        return self.imou_app_id is not None and self.imou_app_secret is not None
 
     @property
     def video_storage_enabled(self) -> bool:

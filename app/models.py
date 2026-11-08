@@ -51,6 +51,8 @@ class CameraRow(Base):
     account_id: Mapped[int | None] = mapped_column(BIGINT_ID, index=True)
     # The name its owner gave it. Set while it is saved on the Cameras page.
     display_name: Mapped[str | None] = mapped_column(Text)
+    # The LAN address its owner typed (192.168.1.50), only to show it: an Imou camera opens by serial number.
+    address: Mapped[str | None] = mapped_column(String(255))
 
 
 class EventRow(Base):

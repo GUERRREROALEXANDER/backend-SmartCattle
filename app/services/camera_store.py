@@ -210,7 +210,9 @@ def _to_record(row: CameraRow) -> CameraRecord:
 
 def _to_saved(row: CameraRow) -> SavedCamera:
     assert row.display_name is not None  # noqa: S101 - the queries ask for it
-    return SavedCamera(id=row.name, name=row.display_name, source=row.source, account_id=row.account_id)
+    return SavedCamera(
+        id=row.name, name=row.display_name, source=row.source, account_id=row.account_id, address=row.address,
+    )
 
 
 def _aware_required(value: datetime) -> datetime:
@@ -270,6 +272,7 @@ class SqlCameraStore:
                 # Compared here rather than with SQL lower(), which only folds ASCII on SQLite.
                 _refuse_a_taken_name(camera, (name for name in session.scalars(others) if name is not None))
                 row.source, row.display_name, row.account_id = camera.source, camera.name, camera.account_id
+                row.address = camera.address
         except IntegrityError as error:
             if not is_unique_violation(error):
                 raise

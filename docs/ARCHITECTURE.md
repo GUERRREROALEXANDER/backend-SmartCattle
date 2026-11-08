@@ -480,3 +480,25 @@ clock, and the arrival time is shown instead.
 **Baileys is unofficial.** It speaks WhatsApp Web's protocol, and Meta can block
 the number. Only the service in front of this queue depends on it, so moving to
 the WhatsApp Business API would change that service and nothing here.
+
+## 16. Imou cameras from anywhere
+
+Decided 2026-11-07. People type their camera's IP address on the Cameras page and expect to watch it from the
+hosted dashboard. A LAN address (192.168.x.x) only exists inside the farm's Wi-Fi, so neither this backend nor the
+AI service on Render can ever open it. An Imou camera also answers through Imou's own cloud by serial number,
+wherever the caller is, and that is what makes it watchable from anywhere without a PC at the farm.
+
+- `IMOU_APP_ID` / `IMOU_APP_SECRET` hold SmartCattle's Imou developer account (open.imoulife.com). Its cameras
+  are the ones the system can open; a camera must be added to that account in the Imou app first.
+- `GET /api/cameras/suggestions` lists them (serial, name, model, online), minus those another account
+  connected. The Imou cloud does not return a camera's LAN address, so recommendations are by serial.
+- `POST /api/cameras/connect` takes `{address}` or `{serial, address}`. A LAN or public address is never
+  tried: the answer is `choose` with the account's free Imou cameras and a `recommended` serial when one is
+  obvious, or `unreachable` when there are none. A serial saves the camera as `imou:<serial>` with the typed
+  address in the new nullable `cameras.address` column (migration 0021), only to show it. Pasted links keep
+  their host only; an address carrying a user or password is refused.
+- `GET /api/ai/cameras/cloud` (the service's own `AI_API_KEY`, never a farm key) lists every saved Imou camera.
+  The AI service on Render (`SMARTCATTLE_CLOUD=1` plus the same Imou keys) polls it every 15 s, opens each
+  camera's HLS stream from the Imou cloud, runs the model and reports status and `stream_url` as any camera does.
+
+Cameras of other brands at a LAN address still need the farm PC (section 14).

@@ -51,6 +51,7 @@ from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
 from app.services.detection_log_store import InMemoryDetectionLogStore, SqlDetectionLogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_agents import FarmServices
+from app.services.imou_cloud import ImouCloud
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
@@ -126,6 +127,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.audit_log = SqlAuditLog(sessions)
         app.state.whatsapp_store = SqlWhatsappStore(sessions)
     app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
+    app.state.imou_cloud = None
+    if settings.imou_app_id is not None and settings.imou_app_secret is not None:
+        app.state.imou_cloud = ImouCloud(
+            settings.imou_app_id, settings.imou_app_secret.get_secret_value(), str(settings.imou_api_url),
+        )
     app.state.broadcaster = Broadcaster()
     app.state.live_sockets = Counter()
     # Per process, not per worker: the lockout is best effort, and Render's
