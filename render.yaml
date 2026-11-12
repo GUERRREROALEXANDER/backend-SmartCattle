@@ -7,8 +7,9 @@ services:
   - type: web
     name: smartcattle-backend
     runtime: python
-    # Free instances run on a fraction of a CPU and can restart at any moment; this one must stay up.
-    plan: starter
+    # deploy-walter: free plan. The code still comes from main; only this Blueprint file lives on this branch.
+    plan: free
+    branch: main
     # A commit whose tests fail never reaches the running service.
     autoDeployTrigger: checksPass
     buildCommand: pip install -r requirements.txt
@@ -43,8 +44,9 @@ services:
         value: "true"
       - key: ACCESS_TOKEN_MINUTES
         value: "60"
+      # Set in the Render dashboard: this deploy's frontend URL has a suffix.
       - key: ALLOWED_ORIGINS
-        value: https://smartcattle-frontend.onrender.com,http://localhost:5173
+        sync: false
       # Works for every account from the start. An account that links a PC at its farm uses that PC instead.
       - key: SMARTCATTLE_AI_URL
         value: http://localhost:8090
@@ -96,9 +98,11 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22.22.0
+      # Set in the Render dashboard: this deploy's backend URL has a suffix.
       - key: VITE_API_BASE_URL
-        value: https://smartcattle-backend.onrender.com
+        sync: false
       - key: VITE_DATA_SOURCE
         value: hybrid
+      # No AI service on Render here: each account's linked farm PC provides live video.
       - key: VITE_AI_SERVICE_URL
-        value: https://smartcattle-live.onrender.com
+        value: ""
