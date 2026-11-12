@@ -1,8 +1,16 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 #: Detections per report. A frame with more boxes than this is a detector
 #: misfiring, and the message would be too large to push to every dashboard.
@@ -28,6 +36,17 @@ class Detection(BaseModel):
         description="[x1, y1, x2, y2] normalised to the frame, like zones, so the view can scale it",
     )
     inside_zone: bool
+    posture: Literal["standing", "walking", "lying"] | None = Field(
+        default=None, description="What the AI estimates the animal is doing; absent when it cannot tell",
+    )
+
+    @model_serializer(mode="wrap")
+    def _leave_out_unknown_posture(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Absent, not null: a box without a posture reads exactly as it did before there were postures."""
+        data: dict[str, object] = handler(self)
+        if data.get("posture") is None:
+            data.pop("posture", None)
+        return data
 
     @field_validator("label", mode="before")
     @classmethod

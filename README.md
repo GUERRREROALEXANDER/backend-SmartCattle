@@ -225,6 +225,7 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/metrics/summary?since=<ISO>` | Event rates and latest-analysis animal estimates; `since` is optional and timezone-aware |
 | GET | `/api/metrics/live` | Live counters from the stores: cameras online, cattle inside/outside from the AI's current counts, open alerts, events in the last hour, `system_status` (signed in) |
 | GET | `/api/ai/cameras/{camera_id}/zones` | The camera's active safe zones for the AI service (`X-API-Key`), which polls it so a zone drawn in the dashboard applies without a restart |
+| PUT | `/api/ai/cameras/{camera_id}/source` | Where the camera is reached, with no credentials, and whether it is still in use (`X-API-Key`); 204. Stored in `cameras.source` and `cameras.active`; not returned by `GET /api/cameras` |
 | PUT | `/api/ai/cameras/{camera_id}/occupancy` | AI head count for one camera plus optional normalised boxes (`X-API-Key`); 204. Counts are stored, boxes are only pushed live |
 | POST | `/api/videos/uploads` | Registers a video (≤ 1 GiB; mp4, mov, mkv, webm) and returns a presigned URL to upload it to (**signed in**); 413 too large, 415 wrong type |
 | POST | `/api/videos/uploads/{id}/complete` | Confirms the file is in the bucket and queues it (uploader or owner) |
@@ -308,6 +309,7 @@ socket.onmessage = ({ data }) => {
 | `alert.created` | the `Alert` | That detection raised a security alert |
 | `alert.updated` | the `Alert` | Someone acknowledged or resolved an alert |
 | `camera.status` | the `Camera` | The AI service reported a camera's state |
+| `camera.removed` | `{id}` | A camera was removed from the dashboard |
 | `occupancy.updated` | `{camera_id, cattle_inside, cattle_outside, observed_at, received_at}` | The AI reported a newer head count |
 | `detections` | `{camera_id, observed_at, detections: [{track_id, label, confidence, bbox, inside_zone}]}` | That count carried boxes; `bbox` is `[x1, y1, x2, y2]` from 0 to 1, so the video overlay and the 3D view scale it to their own size and can flash `inside_zone: false` animals |
 | `video.updated` | the `VideoUpload` | An upload was queued, claimed, completed or failed |

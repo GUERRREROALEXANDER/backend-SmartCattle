@@ -6,6 +6,8 @@ from app.dependencies import (
     AuditTrail,
     Clock,
     CurrentUser,
+    Scope,
+    Visible,
     current_user,
     get_animal_store,
     get_clock,
@@ -44,8 +46,20 @@ def _found(animal: Animal | None, tag: str) -> Animal:
     return animal
 
 
+def _in_scope(store: AnimalStore, tag: str, scope: Scope) -> None:
+    """An animal of another account answers like one that does not exist."""
+    if not scope.sees_account(store.account_of(tag)):
+        _found(None, tag)
+
+
+def _camera_in_scope(camera_id: str | None, scope: Scope) -> None:
+    if camera_id is not None and not scope.sees_camera(camera_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No camera with id {camera_id}")
+
+
 @router.get("", response_model=AnimalList)
 def list_animals(
+    scope: Visible,
     status_filter: Annotated[AnimalStatus | None, Query(alias="status")] = None,
     store: AnimalStore = Depends(get_animal_store),
 ) -> AnimalList:
@@ -55,12 +69,13 @@ def list_animals(
     never deleted, so a default filter would quietly hide rows and make the
     total disagree with the table for reasons the caller cannot see.
     """
-    items = store.list(status_filter)
+    items = store.list(status_filter, scope.account_id)
     return AnimalList(items=items, total=len(items))
 
 
 @router.get("/{tag}", response_model=Animal)
-def get_animal(tag: TagParam, store: AnimalStore = Depends(get_animal_store)) -> Animal:
+def get_animal(tag: TagParam, scope: Visible, store: AnimalStore = Depends(get_animal_store)) -> Animal:
+    _in_scope(store, tag, scope)
     return _found(store.get(tag), tag)
 
 
@@ -71,6 +86,7 @@ def get_animal(tag: TagParam, store: AnimalStore = Depends(get_animal_store)) ->
 def create_animal(
     data: AnimalCreate,
     user: CurrentUser,
+    scope: Visible,
     audit: AuditTrail,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
@@ -81,8 +97,9 @@ def create_animal(
     reviews its alerts, which is why reads are open to any signed-in user and
     this is not.
     """
+    _camera_in_scope(data.camera_id, scope)
     try:
-        animal = store.create(data, clock())
+        animal = store.create(data, clock(), scope.account_id)
     except TagAlreadyRegisteredError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -100,6 +117,7 @@ def update_animal(
     tag: TagParam,
     data: AnimalUpdate,
     user: CurrentUser,
+    scope: Visible,
     audit: AuditTrail,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
@@ -112,6 +130,8 @@ def update_animal(
 
     The tag is not updatable here; see AnimalUpdate.
     """
+    _in_scope(store, tag, scope)
+    _camera_in_scope(data.camera_id, scope)
     animal = _found(store.update(tag, data, clock()), tag)
     audit.record(
         AuditAction.ANIMAL_UPDATED, actor_id=user.id, actor_email=user.email,
@@ -124,6 +144,7 @@ def update_animal(
 def deactivate_animal(
     tag: TagParam,
     user: CurrentUser,
+    scope: Visible,
     audit: AuditTrail,
     store: AnimalStore = Depends(get_animal_store),
     clock: Clock = Depends(get_clock),
@@ -135,6 +156,7 @@ def deactivate_animal(
     apart from one that never existed. The status becomes inactive and the row
     stays.
     """
+    _in_scope(store, tag, scope)
     animal = _found(
         store.update(tag, AnimalUpdate(status=AnimalStatus.INACTIVE), clock()), tag,
     )
@@ -170,6 +192,7 @@ def record_detection(
 @router.get("/{tag}/exists", response_model=dict[str, bool], dependencies=SIGNED_IN)
 def animal_exists(
     tag: TagParam,
+    scope: Visible,
     store: AnimalStore = Depends(get_animal_store),
 ) -> dict[str, bool]:
     """Whether a tag is taken, for the registration form.
@@ -177,4 +200,4 @@ def animal_exists(
     Behind authentication even though it reveals almost nothing: without it,
     anyone could enumerate the farm's ear tags one request at a time.
     """
-    return {"exists": store.get(tag) is not None}
+    return {"exists": store.get(tag) is not None and scope.sees_account(store.account_of(tag))}

@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -33,6 +34,10 @@ class CameraRow(Base):
     id: Mapped[int] = mapped_column(BIGINT_ID, Identity(always=True), primary_key=True)
     # The identifier used by the API and the AI service, e.g. "camera-01".
     name: Mapped[str] = mapped_column(Text, unique=True)
+    # Where the camera is reached, with no credentials: those stay on the PC that opens it.
+    source: Mapped[str] = mapped_column(Text, server_default="0")
+    # False once it was removed from the dashboard. The row stays, for its history.
+    active: Mapped[bool] = mapped_column(Boolean, server_default=true())
     # Added by the backend migration; NULL until the AI service reports this camera.
     reported_status: Mapped[str | None] = mapped_column(String(16))
     last_report_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -42,6 +47,10 @@ class CameraRow(Base):
     frame_height: Mapped[int | None] = mapped_column(Integer)
     fps: Mapped[float | None] = mapped_column(Float)
     stream_url: Mapped[str | None] = mapped_column(String(300))
+    # The account it belongs to. NULL for a camera the AI service reports that nobody saved: nobody sees it.
+    account_id: Mapped[int | None] = mapped_column(BIGINT_ID, index=True)
+    # The name its owner gave it. Set while it is saved on the Cameras page.
+    display_name: Mapped[str | None] = mapped_column(Text)
 
 
 class EventRow(Base):
@@ -89,6 +98,8 @@ class UserRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Added by migration 0005 in the database repository.
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Whose space this account works in: its own id, or the owner's who created it.
+    account_id: Mapped[int | None] = mapped_column(BIGINT_ID, index=True)
 
 
 class AnimalRow(Base):
@@ -114,6 +125,7 @@ class AnimalRow(Base):
     last_detection: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    account_id: Mapped[int | None] = mapped_column(BIGINT_ID, index=True)
 
 
 class ZoneRow(Base):
@@ -352,6 +364,7 @@ class VideoAnalysisRow(Base):
     outside_ratio: Mapped[float] = mapped_column(Float)
     alert_count: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    account_id: Mapped[int | None] = mapped_column(BIGINT_ID, index=True)
 
 
 class VideoAnalysisAlertRow(Base):

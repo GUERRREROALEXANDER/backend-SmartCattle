@@ -1,11 +1,21 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.dependencies import Clock, get_alert_store, get_broadcaster, get_clock, get_event_store, verify_api_key
+from app.dependencies import (
+    Clock,
+    Visible,
+    get_alert_store,
+    get_broadcaster,
+    get_camera_store,
+    get_clock,
+    get_event_store,
+    reporter_account,
+)
 from app.schemas.event import AIEventCreate, Event, EventLevel, EventList, EventType
 from app.services.alert_store import AlertStore
 from app.services.broadcaster import Broadcaster
+from app.services.camera_store import CameraStore
 from app.services.event_store import EventQuery, EventStore
 
 router = APIRouter(tags=["events"])
@@ -21,6 +31,7 @@ MAX_LIMIT = 200
 
 @router.get("/api/events", response_model=EventList)
 def list_events(
+    scope: Visible,
     camera_id: Annotated[str | None, Query(max_length=64)] = None,
     level: EventLevel | None = None,
     event_type: EventType | None = None,
@@ -36,16 +47,19 @@ def list_events(
     """
     query = EventQuery(
         camera_id=camera_id, level=level, event_type=event_type, limit=limit, offset=offset,
+        camera_ids=scope.camera_ids,
     )
     page = store.page(query)
     return EventList(items=page.items, total=page.total)
 
 
-@router.post("/api/ai/events", response_model=Event, status_code=201, dependencies=[Depends(verify_api_key)])
+@router.post("/api/ai/events", response_model=Event, status_code=201)
 def create_event(
     data: AIEventCreate,
+    reporter: int | None = Depends(reporter_account),
     store: EventStore = Depends(get_event_store),
     alerts: AlertStore = Depends(get_alert_store),
+    cameras: CameraStore = Depends(get_camera_store),
     broadcaster: Broadcaster = Depends(get_broadcaster),
     clock: Clock = Depends(get_clock),
 ) -> Event:
@@ -57,9 +71,13 @@ def create_event(
     footage; alerting on them would sound an alarm for something that already
     happened.
     """
+    # A farm PC only speaks for its own cameras.
+    if reporter is not None and cameras.owner_of(data.camera_id) != reporter:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
     now = clock()
     event = store.add(data, now)
     alert = alerts.raise_for(event, now)
-    broadcaster.publish("event.created", event, now)
-    broadcaster.publish("alert.created", alert, now)
+    account = cameras.owner_of(event.camera_id)
+    broadcaster.publish("event.created", event, now, account_id=account)
+    broadcaster.publish("alert.created", alert, now, account_id=account)
     return event

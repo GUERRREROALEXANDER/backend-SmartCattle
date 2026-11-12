@@ -1,7 +1,17 @@
+import os
+
+# Tests register and sign in far more than any person; test_guard.py turns the limits on where they are the subject.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
+# These suites test one farm's behaviour; test_accounts.py turns the separation between accounts on.
+os.environ["ACCOUNT_ISOLATION"] = "false"
+
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine
 
+from app.core import security
 from app.core.config import Settings
+from app.db import create_db_engine
 from app.main import create_app
 
 
@@ -52,3 +62,126 @@ def video_analysis_payload():
         ],
         "avg_confidence": 0.91, "outside_ratio": 0.25,
     }
+
+
+# A 32-byte secret, the minimum Settings accepts. Fixed rather than random so a
+# failure is reproducible from the test output alone.
+TEST_JWT_SECRET = "test-secret-for-the-suite-0123456789"
+
+
+@pytest.fixture
+def auth_settings(settings):
+    """Settings with authentication switched on."""
+    return Settings(
+        _env_file=None, allowed_origins=settings.allowed_origins,
+        smartcattle_ai_url=None, ai_api_key=None, database_url=None,
+        jwt_secret=TEST_JWT_SECRET,
+    )
+
+
+@pytest.fixture
+def auth_client(auth_settings):
+    with TestClient(create_app(auth_settings)) as client:
+        yield client
+
+
+@pytest.fixture
+def owner_payload():
+    return {
+        "email": "ana@finca.example",
+        "password": "una-clave-larga",
+        "full_name": "Ana Restrepo",
+    }
+
+
+@pytest.fixture
+def owner(auth_client, owner_payload):
+    """The first registered account, which is therefore the owner."""
+    return auth_client.post("/api/auth/register", json=owner_payload).json()
+
+
+@pytest.fixture
+def owner_headers(owner):
+    return {"Authorization": f"Bearer {owner['access_token']}"}
+
+
+@pytest.fixture
+def worker(auth_client, owner):
+    """A second account, which is therefore a worker."""
+    return auth_client.post("/api/auth/register", json={
+        "email": "beto@finca.example",
+        "password": "otra-clave-larga",
+        "full_name": "Beto Salazar",
+    }).json()
+
+
+@pytest.fixture
+def worker_headers(worker):
+    return {"Authorization": f"Bearer {worker['access_token']}"}
+
+
+@pytest.fixture(autouse=True)
+def cheap_password_hashing(monkeypatch):
+    """Runs bcrypt at its minimum cost for the whole suite.
+
+    The work factor is the entire point of bcrypt in production and buys
+    nothing in a test: cost 12 is around a tenth of a second per hash, and the
+    auth fixtures hash several times per test. At cost 4 the suite is a few
+    seconds instead of half a minute.
+
+    What is deliberately NOT changed is the algorithm or the verification path,
+    so every property the tests assert -- per-row salt, the 72-byte limit,
+    rejecting a malformed hash -- still holds. test_security pins the
+    production default separately, so lowering it here cannot hide a change to
+    the real value.
+    """
+    monkeypatch.setattr(security, "BCRYPT_ROUNDS", 4)
+
+
+@pytest.fixture
+def analysis_client(auth_client, owner_headers):
+    """An authenticated client for the endpoints that now require a user.
+
+    The header is set on the client rather than passed per call, because what
+    changed is who may use these endpoints and not what each request looks
+    like.
+    """
+    auth_client.headers.update(owner_headers)
+    return auth_client
+
+
+@pytest.fixture
+def secured_auth_client(settings):
+    """Both guards on: the AI shared key and user authentication.
+
+    The endpoints the AI service calls and the ones the browser calls are
+    protected by different mechanisms, and some tests need to cross that line.
+    """
+    configured = Settings(
+        _env_file=None, allowed_origins=settings.allowed_origins,
+        smartcattle_ai_url=None, ai_api_key="test-shared-key", database_url=None,
+        jwt_secret=TEST_JWT_SECRET,
+    )
+    with TestClient(create_app(configured)) as client:
+        yield client
+
+
+@pytest.fixture
+def engine_for():
+    """Opens engines and disposes them when the test ends.
+
+    pyproject turns warnings into errors, and an engine left open emits
+    ResourceWarning: unclosed database once the garbage collector reaches it.
+    That surfaced on CI, where collection happens at a different moment than
+    it does locally.
+    """
+    opened = []
+
+    def open_engine(url: str) -> Engine:
+        engine = create_db_engine(url)
+        opened.append(engine)
+        return engine
+
+    yield open_engine
+    for engine in opened:
+        engine.dispose()

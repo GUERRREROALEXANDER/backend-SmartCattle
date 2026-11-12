@@ -7,10 +7,13 @@ services:
   - type: web
     name: smartcattle-backend
     runtime: python
-    plan: free
+    # Free instances run on a fraction of a CPU and can restart at any moment; this one must stay up.
+    plan: starter
+    # A commit whose tests fail never reaches the running service.
+    autoDeployTrigger: checksPass
     buildCommand: pip install -r requirements.txt
     # Migrations run on every deploy before the API starts.
-    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --ws-max-size 65536 --timeout-keep-alive 20 --no-server-header
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -28,11 +31,21 @@ services:
       # there is no session table to consult.
       - key: JWT_SECRET
         generateValue: true
+      # Each farm signs up by itself, and every account gets its own empty space (ACCOUNT_ISOLATION).
+      - key: PUBLIC_REGISTRATION
+        value: "true"
+      - key: REQUIRE_AUTH_FOR_READS
+        value: "true"
+      - key: API_DOCS_ENABLED
+        value: "false"
+      # Render and Cloudflare are the proxy here, so these headers are theirs and not the client's.
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
       - key: ACCESS_TOKEN_MINUTES
         value: "60"
       - key: ALLOWED_ORIGINS
         value: https://smartcattle-frontend.onrender.com,http://localhost:5173
-      # The AI service runs on the farm PC; this only tells the frontend that vision is set up.
+      # Works for every account from the start. An account that links a PC at its farm uses that PC instead.
       - key: SMARTCATTLE_AI_URL
         value: http://localhost:8090
       - key: CAMERA_OFFLINE_AFTER_SECONDS
@@ -58,8 +71,23 @@ services:
     runtime: static
     repo: https://github.com/GUERRREROALEXANDER/fronted-SmartCattle
     branch: main
+    autoDeployTrigger: checksPass
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      # https: and wss: because a camera's AI service can report any public address (a tunnel, another server).
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     routes:
       # Client-side routes (/live, /cameras, ...) are served by index.html.
       - type: rewrite
@@ -72,3 +100,5 @@ services:
         value: https://smartcattle-backend.onrender.com
       - key: VITE_DATA_SOURCE
         value: hybrid
+      - key: VITE_AI_SERVICE_URL
+        value: https://smartcattle-live.onrender.com

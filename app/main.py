@@ -1,10 +1,11 @@
 import logging
 import math
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -13,6 +14,8 @@ from sqlalchemy import Engine
 from app import __version__
 from app.core.config import Settings, get_settings
 from app.db import create_db_engine, create_session_factory
+from app.dependencies import signed_in_to_read
+from app.guard import GuardMiddleware
 from app.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.routes import (
     alerts,
@@ -22,6 +25,7 @@ from app.routes import (
     cameras,
     catalogs,
     events,
+    farm,
     farms,
     health,
     live,
@@ -37,9 +41,11 @@ from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
 from app.services.animal_store import InMemoryAnimalStore, SqlAnimalStore
 from app.services.audit_log import InMemoryAuditLog, SqlAuditLog
 from app.services.broadcaster import Broadcaster
+from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
+from app.services.farm_agents import FarmServices
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
@@ -68,6 +74,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings = get_settings()
     app = FastAPI(
         title="SmartCattle Backend", version=__version__, lifespan=_lifespan,
+        docs_url="/docs" if settings.api_docs_enabled else None,
+        redoc_url="/redoc" if settings.api_docs_enabled else None,
+        openapi_url="/openapi.json" if settings.api_docs_enabled else None,
         description=(
             "REST API for AI cattle events, camera status, simulated video analyses and summary metrics. "
             "Data is stored in PostgreSQL when DATABASE_URL is set, in memory otherwise."
@@ -107,8 +116,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.audit_log = SqlAuditLog(sessions)
     app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
     app.state.broadcaster = Broadcaster()
+    app.state.live_sockets = Counter()
     # Per process, not per worker: the lockout is best effort, and Render's
     # free plan runs one worker anyway.
+    app.state.camera_pairings = CameraPairings()
+    # Apart from the QR's codes: a phone's QR can be photographed, and it must not be able to link a PC.
+    app.state.farm_pairings = CameraPairings()
+    app.state.farm_services = FarmServices()
     app.state.login_throttle = LoginThrottle(
         max_attempts=settings.max_login_attempts,
         lockout=timedelta(seconds=settings.login_lockout_seconds),
@@ -119,6 +133,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.warning("JWT_SECRET is not set; /api/auth/* returns 503 and no endpoint is protected")
     if not settings.video_storage_enabled:
         logger.warning("VIDEO_STORAGE_* is not set; video uploads and video jobs return 503")
+    # Added first, so it runs inside CORS: a browser refused here must be able to read the refusal.
+    app.add_middleware(GuardMiddleware, settings=settings)
     # Added before CORS so it wraps it: a request rejected by CORS still gets
     # an id and a log line, which is what makes a CORS problem diagnosable
     # instead of a silent browser failure.
@@ -137,18 +153,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(users.router)
-    app.include_router(animals.router)
-    app.include_router(events.router)
-    app.include_router(cameras.router)
+    private_reads = [Depends(signed_in_to_read)]
+    app.include_router(animals.router, dependencies=private_reads)
+    app.include_router(events.router, dependencies=private_reads)
+    app.include_router(cameras.router, dependencies=private_reads)
+    app.include_router(farm.router)
     app.include_router(alerts.router)
     app.include_router(live.router)
     app.include_router(zones.router)
     app.include_router(farms.router)
     app.include_router(video_uploads.router)
     app.include_router(video_jobs.router)
-    app.include_router(videos.router)
-    app.include_router(metrics.router)
-    app.include_router(catalogs.router)
+    app.include_router(videos.router, dependencies=private_reads)
+    app.include_router(metrics.router, dependencies=private_reads)
+    app.include_router(catalogs.router, dependencies=private_reads)
     app.include_router(reports.router)
     app.include_router(audit.router)
 

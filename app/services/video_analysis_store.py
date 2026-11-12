@@ -32,9 +32,11 @@ AlertRows = list[VideoAnalysisAlertRow]
 
 
 class VideoAnalysisStore(Protocol):
-    def add(self, data: VideoAnalysisCreate, created_at: datetime) -> VideoAnalysis: ...
+    def add(self, data: VideoAnalysisCreate, created_at: datetime, account_id: int | None = None) -> VideoAnalysis: ...
 
-    def list(self, limit: int) -> Analyses: ...
+    def list(self, limit: int, account_id: int | None = None) -> Analyses: ...
+
+    def account_of(self, analysis_id: UUID) -> int | None: ...
 
     def get(self, analysis_id: UUID) -> VideoAnalysis | None: ...
 
@@ -55,9 +57,14 @@ class InMemoryVideoAnalysisStore:
     def __init__(self, max_analyses: int = MAX_STORED_ANALYSES) -> None:
         self._analyses: deque[VideoAnalysis] = deque(maxlen=max_analyses)
         self._next_alert_id = 1
+        self._accounts: dict[UUID, int] = {}
         self._lock = Lock()
 
-    def add(self, data: VideoAnalysisCreate, created_at: datetime) -> VideoAnalysis:
+    def account_of(self, analysis_id: UUID) -> int | None:
+        with self._lock:
+            return self._accounts.get(analysis_id)
+
+    def add(self, data: VideoAnalysisCreate, created_at: datetime, account_id: int | None = None) -> VideoAnalysis:
         with self._lock:
             alerts = []
             for alert in data.alerts:
@@ -68,11 +75,16 @@ class InMemoryVideoAnalysisStore:
                 alert_count=len(alerts), created_at=created_at,
             )
             self._analyses.append(analysis)
+            if account_id is not None:
+                self._accounts[analysis.id] = account_id
             return analysis
 
-    def list(self, limit: int) -> Analyses:
+    def list(self, limit: int, account_id: int | None = None) -> Analyses:
         with self._lock:
-            return list(reversed(self._analyses))[:limit]
+            return [
+                analysis for analysis in reversed(self._analyses)
+                if account_id is None or self._accounts.get(analysis.id) == account_id
+            ][:limit]
 
     def get(self, analysis_id: UUID) -> VideoAnalysis | None:
         with self._lock:
@@ -102,12 +114,16 @@ class SqlVideoAnalysisStore:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._sessions = session_factory
 
-    def add(self, data: VideoAnalysisCreate, created_at: datetime) -> VideoAnalysis:
+    def account_of(self, analysis_id: UUID) -> int | None:
+        with self._sessions() as session:
+            return session.scalar(select(VideoAnalysisRow.account_id).where(VideoAnalysisRow.id == analysis_id))
+
+    def add(self, data: VideoAnalysisCreate, created_at: datetime, account_id: int | None = None) -> VideoAnalysis:
         analysis_id = uuid4()
         with self._sessions.begin() as session:
             row = VideoAnalysisRow(
                 **data.model_dump(exclude={"alerts"}), id=analysis_id,
-                alert_count=len(data.alerts), created_at=created_at,
+                alert_count=len(data.alerts), created_at=created_at, account_id=account_id,
             )
             session.add(row)
             # Flushed on its own first: without a relationship() between the
@@ -126,11 +142,13 @@ class SqlVideoAnalysisStore:
             session.flush()
             return _to_analysis(row, alert_rows)
 
-    def list(self, limit: int) -> Analyses:
+    def list(self, limit: int, account_id: int | None = None) -> Analyses:
+        query = select(VideoAnalysisRow)
+        if account_id is not None:
+            query = query.where(VideoAnalysisRow.account_id == account_id)
         with self._sessions() as session:
             rows = session.scalars(
-                select(VideoAnalysisRow).order_by(VideoAnalysisRow.created_at.desc(), VideoAnalysisRow.id.desc())
-                .limit(limit)
+                query.order_by(VideoAnalysisRow.created_at.desc(), VideoAnalysisRow.id.desc()).limit(limit)
             ).all()
             return self._with_alerts(session, rows)
 
