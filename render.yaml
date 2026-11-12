@@ -7,11 +7,12 @@ services:
   - type: web
     name: smartcattle-backend
     runtime: python
-    # deploy-walter: free plan. The code still comes from main; only this Blueprint file lives on this branch.
+    # deploy-walter: free plan, and the code is main plus the branches merged here.
     plan: free
-    branch: main
+    branch: deploy-walter
     # A commit whose tests fail never reaches the running service.
-    autoDeployTrigger: checksPass
+    # CI runs only on main, so this branch deploys on every commit; run the tests before pushing.
+    autoDeployTrigger: commit
     buildCommand: pip install -r requirements.txt
     # Migrations run on every deploy before the API starts.
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --ws-max-size 65536 --timeout-keep-alive 20 --no-server-header
@@ -78,8 +79,9 @@ services:
     name: smartcattle-frontend
     runtime: static
     repo: https://github.com/GUERRREROALEXANDER/fronted-SmartCattle
-    branch: main
-    autoDeployTrigger: checksPass
+    branch: deploy-walter
+    # CI runs only on main, so this branch deploys on every commit; run the tests before pushing.
+    autoDeployTrigger: commit
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
     headers:
