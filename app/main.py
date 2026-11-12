@@ -51,8 +51,8 @@ from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
 from app.services.detection_log_store import InMemoryDetectionLogStore, SqlDetectionLogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_agents import FarmServices
-from app.services.imou_cloud import ImouCloud
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
+from app.services.imou_cloud import ImouCloud
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
 from app.services.user_store import InMemoryUserStore, SqlUserStore

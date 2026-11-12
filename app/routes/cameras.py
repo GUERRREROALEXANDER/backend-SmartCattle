@@ -30,10 +30,11 @@ from app.dependencies import (
 )
 from app.schemas.audit import AuditAction
 from app.schemas.camera import (
+    IMOU_SERIAL,
     Camera,
-    CameraList,
     CameraConnect,
     CameraConnectResult,
+    CameraList,
     CameraLiveAccess,
     CameraPairing,
     CameraRecord,
@@ -44,7 +45,6 @@ from app.schemas.camera import (
     CameraSuggestionList,
     CloudCamera,
     CloudCameraList,
-    IMOU_SERIAL,
     PairedCameraCreate,
     SavedCamera,
     SavedCameraCreate,
@@ -255,7 +255,8 @@ def connect_camera(
         _save(store, saved)
     else:
         if len(store.saved(owner.account_id)) >= MAX_SAVED_CAMERAS:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This account already has too many cameras")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="This account already has too many cameras")
         saved = SavedCamera(
             id=f"cam-{uuid4().hex[:12]}", name=_free_name(data.name or device.name, serial, store, owner.account_id),
             source=imou_source(serial), account_id=owner.account_id, address=label,
@@ -267,7 +268,8 @@ def connect_camera(
         )
     message = ("Connected. The video opens from the Imou cloud in a few seconds."
                if device.online else "Connected. The Imou cloud sees the camera offline: check its power and Wi-Fi.")
-    return CameraConnectResult(outcome="connected", message=message, camera=_saved_view(saved, store, clock(), settings))
+    return CameraConnectResult(outcome="connected", message=message,
+                               camera=_saved_view(saved, store, clock(), settings))
 
 
 @router.get("/api/ai/cameras/cloud", response_model=CloudCameraList, dependencies=[Depends(verify_configured_api_key)])

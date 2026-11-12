@@ -14,6 +14,7 @@ import secrets
 import time
 from collections.abc import Callable
 from threading import Lock
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -26,7 +27,7 @@ PAGE_SIZE = 50
 #: A developer account with more cameras than this is not a farm.
 MAX_PAGES = 10
 
-Post = Callable[[str, dict], dict]
+Post = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 class ImouError(Exception):
@@ -42,12 +43,14 @@ class ImouDevice(BaseModel):
     online: bool
 
 
-def _http_post(url: str, body: dict, timeout: float = 10.0) -> dict:
-    request = Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"},
-                      method="POST")
+def _http_post(url: str, body: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
+    request = Request(  # noqa: S310 - fixed https base URL from settings
+        url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST",
+    )
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https base URL from settings
-            return json.load(response)
+            answer = json.load(response)
+            return answer if isinstance(answer, dict) else {}
     except HTTPError as error:
         raise ImouError(f"Imou answered HTTP {error.code}") from error
     except (URLError, OSError) as error:
@@ -56,7 +59,7 @@ def _http_post(url: str, body: dict, timeout: float = 10.0) -> dict:
         raise ImouError("The Imou cloud sent an invalid answer") from error
 
 
-def _device(item: dict) -> ImouDevice | None:
+def _device(item: dict[str, Any]) -> ImouDevice | None:
     serial = str(item.get("deviceId") or "").strip()
     if not serial:
         return None
@@ -82,7 +85,7 @@ class ImouCloud:
         self._devices: list[ImouDevice] | None = None
         self._devices_at = 0.0
 
-    def _call(self, method: str, params: dict) -> dict:
+    def _call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         now = round(self._clock())
         nonce = secrets.token_hex(16)
         sign = hashlib.md5(  # noqa: S324 - the signature scheme Imou defines, not a password hash
@@ -104,7 +107,7 @@ class ImouCloud:
         data = result.get("data")
         return data if isinstance(data, dict) else {}
 
-    def _with_token(self, method: str, params: dict) -> dict:
+    def _with_token(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         for attempt in range(2):
             if self._token is None or self._clock() >= self._token_expires_at:
                 data = self._call("accessToken", {})

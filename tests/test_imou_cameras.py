@@ -199,7 +199,7 @@ def test_the_client_signs_lists_pages_and_renews_an_expired_token():
 
 
 def test_the_client_reports_a_refusal_without_its_message():
-    cloud = ImouCloud("lc-app", "secret", post=lambda url, body: {"result": {"code": "OP1009", "msg": "appId lc-app"}})
+    cloud = ImouCloud("lc-app", "secret", post=lambda *_: {"result": {"code": "OP1009", "msg": "appId lc-app"}})
     with pytest.raises(ImouError) as raised:
         cloud.devices()
     assert raised.value.code == "OP1009"
