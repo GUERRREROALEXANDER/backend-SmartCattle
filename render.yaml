@@ -67,6 +67,12 @@ services:
         value: auto
       - key: VIDEO_UPLOAD_URL_MINUTES
         value: "120"
+      # Imou developer account (open.imoulife.com): its cameras are recommended on the Cameras page and open
+      # through Imou's cloud, from anywhere. The AI service needs the same two values. Both or neither.
+      - key: IMOU_APP_ID
+        sync: false
+      - key: IMOU_APP_SECRET
+        sync: false
 
   - type: web
     name: smartcattle-frontend

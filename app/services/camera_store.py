@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Protocol
@@ -5,9 +6,10 @@ from typing import Protocol
 from sqlalchemy import Select, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import SessionFactory
+from app.db import SessionFactory, is_unique_violation
 from app.models import CameraRow, CameraStatusChangeRow
 from app.schemas.camera import (
     CameraRecord,
@@ -29,6 +31,16 @@ REPORTED_FIELDS = (
     "last_report_at", "last_online_at", "last_error",
     "frame_width", "frame_height", "fps", "stream_url",
 )
+
+
+class CameraNameTakenError(Exception):
+    """Raised when the account already has a camera with that name, whatever its capitalisation."""
+
+
+def _refuse_a_taken_name(camera: SavedCamera, others: Iterable[str]) -> None:
+    # An unowned camera belongs to nobody who could confuse the two.
+    if camera.account_id is not None and camera.name.lower() in {name.lower() for name in others}:
+        raise CameraNameTakenError(camera.name)
 
 
 class CameraStore(Protocol):
@@ -117,6 +129,11 @@ class InMemoryCameraStore:
 
     def save(self, camera: SavedCamera) -> None:
         with self._lock:
+            others = (
+                item.name for item in self._saved.values()
+                if item.account_id == camera.account_id and item.id != camera.id
+            )
+            _refuse_a_taken_name(camera, others)
             self._saved[camera.id] = camera
             if camera.account_id is not None:
                 self._owners[camera.id] = camera.account_id
@@ -193,7 +210,9 @@ def _to_record(row: CameraRow) -> CameraRecord:
 
 def _to_saved(row: CameraRow) -> SavedCamera:
     assert row.display_name is not None  # noqa: S101 - the queries ask for it
-    return SavedCamera(id=row.name, name=row.display_name, source=row.source, account_id=row.account_id)
+    return SavedCamera(
+        id=row.name, name=row.display_name, source=row.source, account_id=row.account_id, address=row.address,
+    )
 
 
 def _aware_required(value: datetime) -> datetime:
@@ -243,9 +262,22 @@ class SqlCameraStore:
             return None if row is None else CameraRegistration(source=row.source, active=row.active)
 
     def save(self, camera: SavedCamera) -> None:
-        with self._sessions.begin() as session:
-            row = camera_row(session, camera.id, lock=True)
-            row.source, row.display_name, row.account_id = camera.source, camera.name, camera.account_id
+        others = select(CameraRow.display_name).where(
+            CameraRow.account_id == camera.account_id, CameraRow.display_name.is_not(None),
+            CameraRow.name != camera.id,
+        )
+        try:
+            with self._sessions.begin() as session:
+                row = camera_row(session, camera.id, lock=True)
+                # Compared here rather than with SQL lower(), which only folds ASCII on SQLite.
+                _refuse_a_taken_name(camera, (name for name in session.scalars(others) if name is not None))
+                row.source, row.display_name, row.account_id = camera.source, camera.name, camera.account_id
+                row.address = camera.address
+        except IntegrityError as error:
+            if not is_unique_violation(error):
+                raise
+            # Two saves racing past the check above: the shared schema's unique index decides.
+            raise CameraNameTakenError(camera.name) from error
 
     def saved(self, account_id: int | None) -> SavedCameras:
         query = select(CameraRow).where(CameraRow.display_name.is_not(None)).order_by(CameraRow.id)

@@ -69,6 +69,7 @@ app/
 database/schema.sql        Copy of the shared database schema
 migrations/                Alembic environment and revisions
 alembic.ini
+deploy/mediamtx.yml        Template for the media server on the farm PC
 render.yaml                Render Blueprint (backend + frontend static site; PostgreSQL on Neon)
 data_structures/
 docs/ARCHITECTURE.md
@@ -131,6 +132,7 @@ Without `DATABASE_URL` everything is kept in memory and lost on restart. With it
 7. `0015` adds eight catalog tables (`event_types`, `severity_levels`, `alert_statuses`, `camera_statuses`, `lot_kinds`, `user_roles`, `animal_statuses`, `video_upload_statuses`): every coded value with an English and a Spanish label, served by `GET /api/catalogs`. A test fails if a catalog and the enum the API validates against disagree.
 8. `0016` adds the history tables: `occupancy_samples` (the head count per camera, one row per minute), `camera_status_changes` (one row each time a camera's reported status changes) and `audit_log` (who did what).
 9. `0017` adds seven report views for anyone querying PostgreSQL directly: `v_alerts_daily`, `v_alert_response_times`, `v_events_daily`, `v_occupancy_hourly`, `v_camera_status_periods`, `v_farm_overview` and `v_video_processing`. Days follow the session time zone: run `SET TIME ZONE 'America/Bogota';` first for Colombian days.
+10. `0018` and `0019` add account separation and `detection_logs`; `0020` adds `whatsapp_contacts` and `whatsapp_messages`, the verified numbers and the queue the WhatsApp service claims from.
 
 A fresh PostgreSQL database ends with 24 tables, 10 views and 71 indexes. CI checks this on every push: the persistence tests run against PostgreSQL there, not only SQLite, and every view is queried.
 
@@ -184,6 +186,14 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | POST | `/api/auth/login` | Returns a bearer token for an existing account |
 | GET | `/api/auth/me` | The signed-in account |
 | PUT | `/api/auth/me/password` | Changes the caller's password; needs the current one (400 if wrong, throttled like login) |
+| POST | `/api/auth/me/whatsapp/verification` | Sends a 6-digit code to a number with its country code (signed in); 202. 429 if asked too often |
+| POST | `/api/auth/me/whatsapp/verify` | Links the number with that code, with notices on (signed in); 400 if wrong or expired |
+| GET | `/api/auth/me/whatsapp` | The caller's linked number (signed in); 404 if none |
+| PATCH | `/api/auth/me/whatsapp` | Switches notices on or off with `{"enabled": bool}` (signed in) |
+| DELETE | `/api/auth/me/whatsapp` | Removes the number (signed in) |
+| POST | `/api/ai/whatsapp/claim?limit=20` | The WhatsApp service takes the next messages (`X-API-Key`; 503 if `AI_API_KEY` is unset) |
+| POST | `/api/ai/whatsapp/{id}/sent` | That message was delivered to WhatsApp (`X-API-Key`); 204 |
+| POST | `/api/ai/whatsapp/{id}/failed` | Gives up on a message retrying cannot fix (`X-API-Key`); 204 |
 | GET | `/api/users` | Accounts (**owner**); filters `role`, `is_active`; paging `limit` (1–200) and `offset` |
 | POST | `/api/users` | Creates an account with a role and initial password (**owner**); 409 if the email is taken |
 | GET | `/api/users/{id}` | One account (**owner**) |
@@ -218,6 +228,9 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/events` | Event feed, newest received first. Filters: `camera_id`, `level`, `event_type`; paging: `limit` (1–200, default 50) and `offset` |
 | POST | `/api/ai/events` | Validates and stores an AI event; returns 201 with UUID and UTC receipt time |
 | GET | `/api/cameras` | Cameras that reported status, sorted by id, with their effective status |
+| POST | `/api/cameras/{camera_id}/live` | HLS address and a 10-minute ticket for one saved camera (signed in); 404 if it is not this account's, 409 while the farm PC shares no video. See [Live video](#live-video) |
+| GET | `/api/media/jwks.json` | Public key the farm's MediaMTX verifies tickets with (public); 503 without `JWT_SECRET` |
+| PUT | `/api/ai/farm-pc` | Where the linked PC's service, and optionally its media server (`media_url`), can be reached (farm PC's key); 204 |
 | PUT | `/api/ai/cameras/{camera_id}/status` | AI heartbeat: stores the camera status; returns the camera |
 | POST | `/api/videos/analyses` | Stores a simulated video analysis (**signed in**); returns 201 with the analysis and alerts |
 | GET | `/api/videos/analyses?limit=20` | Latest analyses first; `limit` defaults to 20 and accepts 1–100 |
@@ -240,11 +253,18 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | GET | `/api/reports/camera-status?camera_id=&start=&end=` | Each change in a camera's reported status (**signed in**) |
 | GET | `/api/reports/alerts?start=&end=&tz=` | Alerts per day by severity and status, average minutes to acknowledge and resolve (**signed in**) |
 | GET | `/api/reports/events?start=&end=&tz=` | Detections per day and camera, by severity (**signed in**) |
+| PUT | `/api/ai/cameras/{camera_id}/detection-log` | AI counts by posture for one camera (`X-API-Key` or the farm PC's key); 204. Keeps the last report of each minute |
+| GET | `/api/reports/detections?camera_id=&start=&end=` | The logged counts per camera and minute (**signed in**) |
+| GET | `/api/reports/daily?day=&tz=` | One day of activity, health notices and alerts for the caller's account; `day` defaults to today in `tz` (**signed in**) |
 | GET | `/api/audit-log?actor_id=&action=&target_type=&target_id=&start=&end=&limit=&offset=` | Who did what, newest first (**owner**) |
 
 ### Reports and history
 
 The report endpoints default to the last 7 days and accept at most 92; `start` is inclusive, `end` exclusive, and a time without a zone is read as UTC. Days are cut in `tz`, an IANA name that defaults to `America/Bogota`, so an alert at 22:00 in Colombia counts on that day and not on the next one in UTC. An empty or wider window, or an unknown zone, is a 422.
+
+`GET /api/reports/daily` takes one calendar day instead of a window; a future day is a 422. Posture figures are head-minutes: one animal seen for one minute counts 1. `complete` stays false until the day ends. A camera needs 120 observed minutes before it can raise a health notice: `prolonged_lying` above a lying share of 0.8, `little_lying` below 0.2. Treat those two values as starting points to calibrate with a vet. A notice suggests a visit and diagnoses nothing.
+
+If the database cannot be reached, any endpoint answers 503 with `{"detail": ..., "request_id": ...}` and a `Retry-After` header, after waiting at most 10 seconds for a connection.
 
 The audit log records sign-ins (failed ones with the address typed), account changes, alert handling, and farm, lot, zone, animal and video-upload changes. It stores which fields changed, never passwords. It is written after the action, so a failure to write it is logged and does not turn a completed action into an error.
 
@@ -334,6 +354,10 @@ Events created by `POST /api/videos/analyses` raise no alert. They describe
 recorded footage, and an alarm for something that already happened would
 train people to ignore alarms.
 
+### WhatsApp notices
+
+A detection from a camera saved in an account sends one WhatsApp message to each verified number in that account, at most once per camera every 10 minutes. Low-severity detections stay on the dashboard. The sender is a separate Node service that claims messages from this API; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#5-whatsapp-notices) and the reasons in [ARCHITECTURE.md](docs/ARCHITECTURE.md#15-whatsapp-notices).
+
 ### Event feed
 
 `GET /api/events` pages and filters. `total` is the number of events matching
@@ -371,6 +395,19 @@ Optional `stream_url` is the public `http(s)` base URL of the AI service video (
 `GET /api/cameras` returns `status` (effective) and `reported_status`. If the last report is older than `CAMERA_OFFLINE_AFTER_SECONDS`, the effective status is `offline`: the backend cannot claim a camera is online unless the AI service keeps confirming it. Cameras appear only after their first report; an empty list means no camera is connected.
 
 Invalid event bodies return 422. If a shared key is configured, a missing or incorrect key returns 401 with `Invalid or missing API key`. Unhandled errors return 500 with `Internal server error` without a trace in the response.
+
+### Live video
+
+Video goes from MediaMTX on the farm PC to the browser and never through this API. Setting up the PC is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#4-live-video-from-anywhere); the reasons are in [ARCHITECTURE.md](docs/ARCHITECTURE.md#14-live-video-from-anywhere).
+
+```js
+const live = await api.post(`/cameras/${cameraId}/live`);
+const hls = new Hls({ xhrSetup: (xhr) => xhr.setRequestHeader("Authorization", `Bearer ${live.token}`) });
+hls.loadSource(live.hls_url);
+hls.attachMedia(video);
+```
+
+The ticket opens that one camera and nothing else, for `expires_in` seconds. It is sent as a header because a token in a URL ends up in access logs. Video already open keeps playing after the ticket expires; ask for a new one each time the player opens. Expect a few seconds of delay: HLS is the protocol a tunnel can carry.
 
 ## Frontend integration
 

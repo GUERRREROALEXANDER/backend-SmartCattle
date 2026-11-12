@@ -1,7 +1,7 @@
 """Time windows for the history and report endpoints."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException, status
@@ -40,6 +40,13 @@ def window(start: datetime | None, end: datetime | None, now: datetime) -> Windo
             detail=f"The window may span at most {MAX_WINDOW.days} days",
         )
     return Window(start_at, end_at)
+
+
+def day_window(day: date, zone: ZoneInfo) -> Window:
+    """One calendar day in a zone, in UTC. Built from local midnights because a day can last 23 or 25 hours."""
+    start = datetime.combine(day, time.min, zone)
+    end = datetime.combine(day + timedelta(days=1), time.min, zone)
+    return Window(start.astimezone(UTC), end.astimezone(UTC))
 
 
 def time_zone(name: str) -> ZoneInfo:

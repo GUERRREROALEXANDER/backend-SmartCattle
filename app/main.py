@@ -10,6 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 
 from app import __version__
 from app.core.config import Settings, get_settings
@@ -29,12 +31,14 @@ from app.routes import (
     farms,
     health,
     live,
+    media,
     metrics,
     reports,
     users,
     video_jobs,
     video_uploads,
     videos,
+    whatsapp,
     zones,
 )
 from app.services.alert_store import InMemoryAlertStore, SqlAlertStore
@@ -44,8 +48,10 @@ from app.services.broadcaster import Broadcaster
 from app.services.camera_pairing import CameraPairings
 from app.services.camera_store import InMemoryCameraStore, SqlCameraStore
 from app.services.catalog_store import InMemoryCatalogStore, SqlCatalogStore
+from app.services.detection_log_store import InMemoryDetectionLogStore, SqlDetectionLogStore
 from app.services.event_store import InMemoryEventStore, SqlEventStore
 from app.services.farm_agents import FarmServices
+from app.services.imou_cloud import ImouCloud
 from app.services.farm_store import InMemoryFarmStore, SqlFarmStore
 from app.services.login_throttle import LoginThrottle
 from app.services.occupancy_store import InMemoryOccupancyStore, SqlOccupancyStore
@@ -53,6 +59,8 @@ from app.services.user_store import InMemoryUserStore, SqlUserStore
 from app.services.video_analysis_store import InMemoryVideoAnalysisStore, SqlVideoAnalysisStore
 from app.services.video_storage import S3VideoStorage
 from app.services.video_upload_store import InMemoryVideoUploadStore, SqlVideoUploadStore
+from app.services.whatsapp_store import InMemoryWhatsappStore, SqlWhatsappStore
+from app.services.whatsapp_verification import PhoneVerifications
 from app.services.zone_store import InMemoryZoneStore, SqlZoneStore
 
 logger = logging.getLogger(__name__)
@@ -95,9 +103,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.farm_store = InMemoryFarmStore()
         app.state.alert_store = InMemoryAlertStore()
         app.state.occupancy_store = InMemoryOccupancyStore()
+        app.state.detection_log_store = InMemoryDetectionLogStore()
         app.state.video_upload_store = InMemoryVideoUploadStore()
         app.state.catalog_store = InMemoryCatalogStore()
         app.state.audit_log = InMemoryAuditLog()
+        app.state.whatsapp_store = InMemoryWhatsappStore()
     else:
         # The schema is created by Alembic migrations (alembic upgrade head), never here.
         app.state.engine = create_db_engine(settings.sqlalchemy_url)
@@ -111,10 +121,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.farm_store = SqlFarmStore(sessions)
         app.state.alert_store = SqlAlertStore(sessions)
         app.state.occupancy_store = SqlOccupancyStore(sessions)
+        app.state.detection_log_store = SqlDetectionLogStore(sessions)
         app.state.video_upload_store = SqlVideoUploadStore(sessions)
         app.state.catalog_store = SqlCatalogStore(sessions)
         app.state.audit_log = SqlAuditLog(sessions)
+        app.state.whatsapp_store = SqlWhatsappStore(sessions)
     app.state.video_storage = S3VideoStorage(settings) if settings.video_storage_enabled else None
+    app.state.imou_cloud = None
+    if settings.imou_app_id is not None and settings.imou_app_secret is not None:
+        app.state.imou_cloud = ImouCloud(
+            settings.imou_app_id, settings.imou_app_secret.get_secret_value(), str(settings.imou_api_url),
+        )
     app.state.broadcaster = Broadcaster()
     app.state.live_sockets = Counter()
     # Per process, not per worker: the lockout is best effort, and Render's
@@ -123,6 +140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Apart from the QR's codes: a phone's QR can be photographed, and it must not be able to link a PC.
     app.state.farm_pairings = CameraPairings()
     app.state.farm_services = FarmServices()
+    app.state.phone_verifications = PhoneVerifications()
     app.state.login_throttle = LoginThrottle(
         max_attempts=settings.max_login_attempts,
         lockout=timedelta(seconds=settings.login_lockout_seconds),
@@ -157,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(animals.router, dependencies=private_reads)
     app.include_router(events.router, dependencies=private_reads)
     app.include_router(cameras.router, dependencies=private_reads)
+    app.include_router(media.router)
     app.include_router(farm.router)
     app.include_router(alerts.router)
     app.include_router(live.router)
@@ -164,6 +183,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(farms.router)
     app.include_router(video_uploads.router)
     app.include_router(video_jobs.router)
+    app.include_router(whatsapp.router)
+    app.include_router(whatsapp.service_router)
     app.include_router(videos.router, dependencies=private_reads)
     app.include_router(metrics.router, dependencies=private_reads)
     app.include_router(catalogs.router, dependencies=private_reads)
@@ -188,6 +209,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
             detail.append(item)
         return JSONResponse(status_code=422, content={"detail": detail})
+
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(SqlAlchemyTimeoutError)
+    async def handle_unavailable_database(request: Request, exc: Exception) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logger.error("Database unavailable: %s", type(exc).__name__, extra={"request_id": request_id})
+        # 503 and not 500: the request was fine and the same one can work in a
+        # moment. The driver's message names the host, so it stays in no response.
+        content = {"detail": "The database is unavailable. Try again shortly."}
+        return JSONResponse(
+            status_code=503, headers={"Retry-After": "10"},
+            content=content if request_id is None else content | {"request_id": request_id},
+        )
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:

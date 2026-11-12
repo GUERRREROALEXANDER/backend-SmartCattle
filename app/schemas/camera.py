@@ -1,5 +1,7 @@
+import re
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
@@ -119,6 +121,7 @@ class SavedCamera(BaseModel):
     name: str
     source: str
     account_id: int | None = None
+    address: str | None = None
 
 
 class SavedCameraView(BaseModel):
@@ -126,11 +129,128 @@ class SavedCameraView(BaseModel):
     name: str
     source: str
     status: CameraStatus = Field(description="online only while the AI service is sending it")
+    address: str | None = Field(default=None, description="LAN address its owner typed, shown in the dashboard")
+    cloud: bool = Field(default=False, description="Opened through the Imou cloud: watchable from anywhere")
+
+
+IMOU_PREFIX = "imou:"
+IMOU_SERIAL = re.compile(r"^[A-Z0-9]{8,32}$")
+
+
+def imou_source(serial: str) -> str:
+    return f"{IMOU_PREFIX}{serial}"
+
+
+def imou_serial_of(source: str) -> str | None:
+    """The serial number of an Imou cloud camera, or None for any other kind of source."""
+    if not source.startswith(IMOU_PREFIX):
+        return None
+    serial = source.removeprefix(IMOU_PREFIX)
+    return serial if IMOU_SERIAL.fullmatch(serial) else None
+
+
+class CameraConnect(BaseModel):
+    """What the Cameras page asks: the camera's address, or the Imou camera it recommended."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"address": "192.168.100.30"}, {"serial": "04797CEPSF59DA6",
+                                                                          "address": "192.168.100.30"}]},
+    )
+
+    address: str | None = Field(default=None, max_length=255, description="IP address, host name or Imou serial")
+    serial: str | None = Field(default=None, description="Serial number of a recommended Imou camera")
+    name: str | None = Field(default=None, max_length=80)
+
+    @field_validator("address", "serial", "name", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("address")
+    @classmethod
+    def plain_address(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        # People paste links; only the host matters, and a password must never reach the server's logs.
+        if "://" in value:
+            parts = urlsplit(value)
+            if parts.username or parts.password:
+                raise ValueError("address must not contain a user or password")
+            value = parts.hostname or ""
+        else:
+            value = value.split("/", 1)[0]
+            if "@" in value:
+                raise ValueError("address must not contain a user or password")
+            if value.count(":") == 1:
+                value = value.split(":", 1)[0]
+        if not re.fullmatch(r"[A-Za-z0-9.\-]{1,253}", value):
+            raise ValueError("address must be an IP address or a host name")
+        return value
+
+    @field_validator("serial")
+    @classmethod
+    def serial_format(cls, value: str | None) -> str | None:
+        if value is not None:
+            value = value.upper()
+            if not IMOU_SERIAL.fullmatch(value):
+                raise ValueError("serial must be the camera's serial number, letters and digits")
+        return value
+
+    @model_validator(mode="after")
+    def something_to_connect(self) -> "CameraConnect":
+        if self.address is None and self.serial is None:
+            raise ValueError("Give the camera's address or serial number")
+        return self
+
+
+class CameraSuggestion(BaseModel):
+    serial: str
+    name: str
+    model: str | None = None
+    online: bool = Field(description="Whether the Imou cloud sees it connected right now")
+    camera_id: str | None = Field(default=None, description="Its saved camera in this account, if already connected")
+
+
+class CameraSuggestionList(BaseModel):
+    available: bool = Field(description="False when this server has no Imou account or could not reach it")
+    message: str | None = None
+    items: list[CameraSuggestion]
+
+
+class CameraConnectResult(BaseModel):
+    outcome: Literal["connected", "choose", "unreachable"] = Field(
+        description="connected: saved and opening from the cloud; choose: pick one of the suggestions; "
+                    "unreachable: the cloud cannot open this address",
+    )
+    message: str
+    camera: SavedCameraView | None = None
+    suggestions: list[CameraSuggestion] = Field(default_factory=list)
+    recommended: str | None = Field(default=None, description="Serial of the suggestion to connect, when obvious")
+
+
+class CloudCamera(BaseModel):
+    camera_id: str
+    source: str
+
+
+class CloudCameraList(BaseModel):
+    items: list[CloudCamera]
 
 
 class SavedCameraList(BaseModel):
     items: list[SavedCameraView]
     total: int
+
+
+class CameraLiveAccess(BaseModel):
+    camera_id: str
+    hls_url: str = Field(description="HLS playlist on the farm's media server")
+    token: str = Field(description="Send as Authorization: Bearer on the player's requests")
+    expires_in: int = Field(description="Seconds the token can open the video; video already open keeps playing")
 
 
 class CameraRegistration(BaseModel):

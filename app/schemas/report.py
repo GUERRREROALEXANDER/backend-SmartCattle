@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -78,3 +79,64 @@ class EventReport(_Window):
 
     days: list[EventDay]
     total: int
+
+
+class ActivitySummary(BaseModel):
+    """What was watched. The posture figures are head-minutes: one animal seen for one minute is 1."""
+
+    observed_minutes: int = Field(description="Minutes with a report; the rest of the day nobody was watching")
+    lying_minutes: int
+    standing_minutes: int
+    walking_minutes: int
+    unknown_posture_minutes: int
+    peak_cattle: int = Field(description="Most animals seen in one minute")
+    peak_people: int
+    minutes_with_people: int
+    lying_share: float | None = Field(
+        description="Lying head-minutes over those with a known posture; null when no posture was seen",
+    )
+
+
+class CameraActivity(ActivitySummary):
+    camera_id: str
+
+
+class HealthNoticeKind(StrEnum):
+    PROLONGED_LYING = "prolonged_lying"
+    LITTLE_LYING = "little_lying"
+
+
+class HealthNotice(BaseModel):
+    """Something worth going to look at. Derived from posture counts, so it is never a diagnosis."""
+
+    camera_id: str
+    kind: HealthNoticeKind
+    lying_share: float
+    observed_minutes: int
+    message: str
+
+
+class AlertSummary(BaseModel):
+    total: int
+    low: int
+    medium: int
+    high: int
+    open: int
+    acknowledged: int
+    resolved: int
+
+
+class DailyReport(BaseModel):
+    """One calendar day of activity, health indicators and alerts, computed when it is asked for."""
+
+    day: date
+    time_zone: str = Field(description="IANA name the day was cut in")
+    start: datetime
+    end: datetime
+    complete: bool = Field(description="False while the day is still running, so its figures can grow")
+    generated_at: datetime
+    herd: ActivitySummary = Field(description="Every camera together; peaks can count an animal two cameras share")
+    cameras: list[CameraActivity]
+    health: list[HealthNotice]
+    alerts: AlertSummary
+    events_total: int

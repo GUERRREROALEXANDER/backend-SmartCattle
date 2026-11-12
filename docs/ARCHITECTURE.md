@@ -180,9 +180,9 @@ responses or logs. Camera error messages are capped at 300 characters and
 rejected if they contain `://`, so a stream URL with embedded credentials
 cannot be stored and later shown in the frontend.
 
-**Video.** The backend does not proxy or store video. Live video, when the
-camera stream is confirmed, goes from a local media server on the farm PC to
-the browser (see the AI repository README); the backend only stores state.
+**Video.** The backend does not proxy or store video. Live video goes from a
+media server on the farm PC to the browser (section 14); the backend only says
+where it is and who may watch.
 
 ## 9. Simulated video analyses and summary metrics
 
@@ -366,3 +366,139 @@ same body as `POST /api/videos/analyses` and goes through the same
 Its events raise no live security alert, for the reason given in section 11.
 Per-frame boxes travel in `video.progress` messages with `video_time_sec`, so
 the dashboard can draw them over playback, and are not stored.
+
+## 13. Detection logs and the daily report
+
+Decided 2026-11-03 so a farm can read one day of herd activity without opening
+the dashboard's charts.
+
+**YOLO stays in SmartCattle-AI.** Section 2 still holds: this service runs no
+inference. The AI service counts what it sees and sends the counts to
+`PUT /api/ai/cameras/{id}/detection-log`. Posture needs a model that outputs it;
+the backend stores whatever the AI reports and has no opinion on how it got there.
+
+**One row per camera and minute.** `detection_logs` follows `occupancy_samples`
+and section 8's rule against per-frame history: 1 440 rows per camera per day.
+The last report of a minute replaces the earlier ones, because adding them would
+count one animal once per report. An empty scene gets a row too, so the report
+can tell a quiet pasture from a camera that was off.
+
+**Computed on request, with no `daily_reports` table.** `DailyReportBuilder`
+reads the logs, alerts and events of the day and keeps no copy. A saved report
+needs a scheduler this deployment does not have, and it would go stale whenever
+a late report from the farm arrived. The cost is a read of up to 1 440 rows per
+camera per request.
+
+**Health notices are prompts.** They rest on posture counts from a camera, with
+no knowledge of which animal lay down or why. A camera that only runs by day
+reads low, since cattle do most of their lying at night, so the thresholds in
+`app/services/daily_report.py` need calibrating with a vet before anyone relies
+on them.
+
+**The account filter applies here too.** The report goes through `Visible` like
+the other reports, so another account's camera id behaves like one that does not
+exist.
+
+## 14. Live video from anywhere
+
+Decided 2026-11-04 so a person can watch a camera away from the farm without
+opening ports on its router.
+
+**MediaMTX on the farm PC, reached through a tunnel.** The camera is only
+reachable on the farm's network (section 8), and Render offers neither UDP nor a
+second port, so a media server there could not receive the camera anyway. The PC
+already runs a Cloudflare tunnel for the AI service and reports its address with
+`PUT /api/ai/farm-pc`, so the media server's address travels in the same report
+and is held in memory the same way. No table was added.
+
+**HLS only.** A tunnel carries HTTP. WebRTC's media needs UDP or a TURN relay,
+which this deployment does not have. The cost is a few seconds of delay.
+
+**Tickets, verified at the farm.** MediaMTX can ask the backend about each
+request or verify a signed token by itself. HLS is many requests per viewer, so
+asking would put an internet round trip in front of every segment, count against
+the rate limit of that one address, and stop the video whenever Render's free
+instance is asleep. `POST /api/cameras/{id}/live` signs a ticket instead, and
+MediaMTX checks it against `GET /api/media/jwks.json`.
+
+**Ed25519, not the session key.** HS256 would mean giving `JWT_SECRET` to every
+farm PC, and with it the power to sign in as anyone. The private key is derived
+from `JWT_SECRET`, like the farm keys, so there is nothing new to configure. A
+ticket and a session cannot stand in for each other: `decode_access_token` pins
+HS256 and MediaMTX only trusts the published key.
+
+**A ticket opens the video; it does not keep it open.** A ticket grants `read` on
+one path for ten minutes, and MediaMTX checks it when a session starts. The session
+then runs on an id in its URLs, past the ticket's expiry (measured on v1.21.3). So
+the ten minutes limit how long a ticket can start a session, not how long someone
+watches. A deactivated account's open player keeps playing until it stops, and only
+restarting MediaMTX cuts it. Those URLs act as a secret while the session lasts.
+
+MediaMTX fetches the public key once at startup, so it must be restarted after
+`JWT_SECRET` is replaced; until then every ticket is refused.
+
+**Camera passwords stay on the PC.** They live in the PC's copy of
+`deploy/mediamtx.yml` and nowhere else, which keeps the rule in section 8.
+
+## 15. WhatsApp notices
+
+Decided 2026-11-04 so an owner away from the dashboard hears that cattle left
+the zone.
+
+**No language model.** YOLO and the zone rule already decide what happened. A
+fixed text costs nothing, cannot invent a detail, and reads the same every time.
+It is in Spanish, unlike the rest of this codebase, because it is product content
+for the people receiving it, like the Spanish labels in the catalogs.
+
+**A queue the sender claims from.** The sender is a Node service using Baileys,
+which needs a long-lived session and runs on a PC the backend cannot reach. It
+polls `POST /api/ai/whatsapp/claim`, so it needs no tunnel, and messages wait
+while it is off. The table is the queue, as in section 12, and this keeps a
+WhatsApp outage out of the ingestion request.
+
+**At least once, and bounded.** A claim is a 60-second lease, offered three times
+at most. A service that dies between sending and reporting can repeat a message,
+which beats losing an alert. Alert notices expire after an hour and verification
+codes after ten minutes: after a night offline, a stale burst would say nothing
+anyone can act on. Bodies are emptied once settled, because one may hold a code.
+
+**Only verified numbers.** A typo would otherwise send a farm's alerts to a
+stranger indefinitely. Codes live in memory, like the QR codes, and are limited
+per person and per number, since each request messages whoever holds that number.
+
+**One message per camera every ten minutes.** One animal outside produces many
+detections, and repetition gets the number reported as spam. Every detection
+still raises its alert on the dashboard. Low-severity detections send nothing.
+Only cameras with an owner notify anyone: a camera nobody saved belongs to no
+account, so nobody can be told.
+
+**The message says when it was detected.** The AI service can deliver a detection
+late after an outage, so the time shown is the detection's, not the arrival's. A
+time more than an hour from the backend's clock is taken as a farm PC with a wrong
+clock, and the arrival time is shown instead.
+
+**Baileys is unofficial.** It speaks WhatsApp Web's protocol, and Meta can block
+the number. Only the service in front of this queue depends on it, so moving to
+the WhatsApp Business API would change that service and nothing here.
+
+## 16. Imou cameras from anywhere
+
+Decided 2026-11-07. People type their camera's IP address on the Cameras page and expect to watch it from the
+hosted dashboard. A LAN address (192.168.x.x) only exists inside the farm's Wi-Fi, so neither this backend nor the
+AI service on Render can ever open it. An Imou camera also answers through Imou's own cloud by serial number,
+wherever the caller is, and that is what makes it watchable from anywhere without a PC at the farm.
+
+- `IMOU_APP_ID` / `IMOU_APP_SECRET` hold SmartCattle's Imou developer account (open.imoulife.com). Its cameras
+  are the ones the system can open; a camera must be added to that account in the Imou app first.
+- `GET /api/cameras/suggestions` lists them (serial, name, model, online), minus those another account
+  connected. The Imou cloud does not return a camera's LAN address, so recommendations are by serial.
+- `POST /api/cameras/connect` takes `{address}` or `{serial, address}`. A LAN or public address is never
+  tried: the answer is `choose` with the account's free Imou cameras and a `recommended` serial when one is
+  obvious, or `unreachable` when there are none. A serial saves the camera as `imou:<serial>` with the typed
+  address in the new nullable `cameras.address` column (migration 0021), only to show it. Pasted links keep
+  their host only; an address carrying a user or password is refused.
+- `GET /api/ai/cameras/cloud` (the service's own `AI_API_KEY`, never a farm key) lists every saved Imou camera.
+  The AI service on Render (`SMARTCATTLE_CLOUD=1` plus the same Imou keys) polls it every 15 s, opens each
+  camera's HLS stream from the Imou cloud, runs the model and reports status and `stream_url` as any camera does.
+
+Cameras of other brands at a LAN address still need the farm PC (section 14).

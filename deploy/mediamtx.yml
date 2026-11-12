@@ -1,0 +1,33 @@
+# MediaMTX on the farm PC. See "Live video from anywhere" in docs/DEPLOYMENT.md.
+# Copy it next to mediamtx.exe, fill in the placeholders, and keep the copy on that PC:
+# it holds the cameras' passwords, which never reach the backend or this repository.
+
+logLevel: info
+
+# Every viewer needs a ticket from POST /api/cameras/{id}/live. The key is fetched once at
+# startup, so restart MediaMTX if JWT_SECRET is replaced.
+authMethod: jwt
+authJWTJWKS: https://YOUR-BACKEND.onrender.com/api/media/jwks.json
+authJWTClaimKey: mediamtx_permissions
+authJWTIssuer: smartcattle-backend
+authJWTAudience: smartcattle-media
+
+# Local only: the tunnel is what reaches it from outside.
+hls: true
+hlsAddress: 127.0.0.1:8888
+hlsAllowOrigins: ["https://YOUR-DASHBOARD.onrender.com"]
+
+# HLS is the only protocol a tunnel carries; the rest would just be open ports.
+api: false
+rtsp: false
+rtmp: false
+webrtc: false
+srt: false
+moq: false
+
+paths:
+  # The name is the id of the camera in the dashboard (GET /api/cameras/saved).
+  cam-000000000000:
+    source: rtsp://USER:PASSWORD@192.168.1.50:554/live
+    # Opens the camera only while someone is watching.
+    sourceOnDemand: true
