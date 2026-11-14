@@ -18,7 +18,6 @@ class AuditAction(StrEnum):
     PASSWORD_CHANGED = "auth.password_changed"  # noqa: S105 - an action name, not a password
     USER_CREATED = "user.created"
     USER_UPDATED = "user.updated"
-    WHATSAPP_CHANGED = "user.whatsapp_changed"
     ALERT_ACKNOWLEDGED = "alert.acknowledged"
     ALERT_RESOLVED = "alert.resolved"
     FARM_CREATED = "farm.created"

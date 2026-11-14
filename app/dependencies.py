@@ -39,8 +39,6 @@ from app.services.user_store import StoredUser, UserStore
 from app.services.video_analysis_store import VideoAnalysisStore
 from app.services.video_storage import VideoStorage
 from app.services.video_upload_store import VideoUploadStore
-from app.services.whatsapp_store import WhatsappStore
-from app.services.whatsapp_verification import PhoneVerifications
 from app.services.zone_store import ZoneStore
 
 #: Returns the current time, always timezone-aware and in UTC. Injected so
@@ -175,16 +173,6 @@ def get_camera_pairings(request: Request) -> CameraPairings:
 def get_login_throttle(request: Request) -> LoginThrottle:
     throttle: LoginThrottle = request.app.state.login_throttle
     return throttle
-
-
-def get_whatsapp_store(request: Request) -> WhatsappStore:
-    store: WhatsappStore = request.app.state.whatsapp_store
-    return store
-
-
-def get_phone_verifications(request: Request) -> PhoneVerifications:
-    verifications: PhoneVerifications = request.app.state.phone_verifications
-    return verifications
 
 
 def verify_api_key(

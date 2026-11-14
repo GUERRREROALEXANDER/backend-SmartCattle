@@ -29,7 +29,6 @@ A worker reads everything and changes nothing about the farm's
 | Read, acknowledge or resolve security alerts; open the live stream | yes | yes |
 | Watch a camera's live video | yes | yes |
 | Change their own password | yes | yes |
-| Link their own WhatsApp number and switch its notices on or off | yes | yes |
 | List, create, promote, demote or deactivate accounts | no | yes |
 
 Farms add a second check on top of the role. Being an owner allows

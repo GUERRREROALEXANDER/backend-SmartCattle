@@ -24,7 +24,7 @@ Camera capture, image or video processing, OpenCV, YOLO, ultralytics, numpy, mod
 │        │ SQLAlchemy      │              │        ▲ RTSP (LAN only) │
 │        ▼                 │              └────────┼─────────────────┘
 │ PostgreSQL               │                       │
-└──────────────────────────┘                IP camera (IMOU)
+└──────────────────────────┘                IP camera       
 ```
 
 The AI service runs next to the camera because the camera is only reachable on the local network; Render cannot open a connection to it. The AI never talks to PostgreSQL: it pushes events and camera status to this backend over HTTPS. The backend does not call the AI service.
@@ -132,7 +132,7 @@ Without `DATABASE_URL` everything is kept in memory and lost on restart. With it
 7. `0015` adds eight catalog tables (`event_types`, `severity_levels`, `alert_statuses`, `camera_statuses`, `lot_kinds`, `user_roles`, `animal_statuses`, `video_upload_statuses`): every coded value with an English and a Spanish label, served by `GET /api/catalogs`. A test fails if a catalog and the enum the API validates against disagree.
 8. `0016` adds the history tables: `occupancy_samples` (the head count per camera, one row per minute), `camera_status_changes` (one row each time a camera's reported status changes) and `audit_log` (who did what).
 9. `0017` adds seven report views for anyone querying PostgreSQL directly: `v_alerts_daily`, `v_alert_response_times`, `v_events_daily`, `v_occupancy_hourly`, `v_camera_status_periods`, `v_farm_overview` and `v_video_processing`. Days follow the session time zone: run `SET TIME ZONE 'America/Bogota';` first for Colombian days.
-10. `0018` and `0019` add account separation and `detection_logs`; `0020` adds `whatsapp_contacts` and `whatsapp_messages`, the verified numbers and the queue the WhatsApp service claims from.
+10. `0018` and `0019` add account separation and `detection_logs`.
 
 A fresh PostgreSQL database ends with 24 tables, 10 views and 71 indexes. CI checks this on every push: the persistence tests run against PostgreSQL there, not only SQLite, and every view is queried.
 
@@ -186,14 +186,6 @@ See [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and
 | POST | `/api/auth/login` | Returns a bearer token for an existing account |
 | GET | `/api/auth/me` | The signed-in account |
 | PUT | `/api/auth/me/password` | Changes the caller's password; needs the current one (400 if wrong, throttled like login) |
-| POST | `/api/auth/me/whatsapp/verification` | Sends a 6-digit code to a number with its country code (signed in); 202. 429 if asked too often |
-| POST | `/api/auth/me/whatsapp/verify` | Links the number with that code, with notices on (signed in); 400 if wrong or expired |
-| GET | `/api/auth/me/whatsapp` | The caller's linked number (signed in); 404 if none |
-| PATCH | `/api/auth/me/whatsapp` | Switches notices on or off with `{"enabled": bool}` (signed in) |
-| DELETE | `/api/auth/me/whatsapp` | Removes the number (signed in) |
-| POST | `/api/ai/whatsapp/claim?limit=20` | The WhatsApp service takes the next messages (`X-API-Key`; 503 if `AI_API_KEY` is unset) |
-| POST | `/api/ai/whatsapp/{id}/sent` | That message was delivered to WhatsApp (`X-API-Key`); 204 |
-| POST | `/api/ai/whatsapp/{id}/failed` | Gives up on a message retrying cannot fix (`X-API-Key`); 204 |
 | GET | `/api/users` | Accounts (**owner**); filters `role`, `is_active`; paging `limit` (1–200) and `offset` |
 | POST | `/api/users` | Creates an account with a role and initial password (**owner**); 409 if the email is taken |
 | GET | `/api/users/{id}` | One account (**owner**) |
@@ -353,10 +345,6 @@ Workers can handle alerts: that is the everyday job, not farm configuration.
 Events created by `POST /api/videos/analyses` raise no alert. They describe
 recorded footage, and an alarm for something that already happened would
 train people to ignore alarms.
-
-### WhatsApp notices
-
-A detection from a camera saved in an account sends one WhatsApp message to each verified number in that account, at most once per camera every 10 minutes. Low-severity detections stay on the dashboard. The sender is a separate Node service that claims messages from this API; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#5-whatsapp-notices) and the reasons in [ARCHITECTURE.md](docs/ARCHITECTURE.md#15-whatsapp-notices).
 
 ### Event feed
 
